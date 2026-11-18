@@ -528,7 +528,14 @@ public sealed class ManagedAgentDeployServiceTests
     }
 
     private static RecordingAttachPort Connecting(FakeCopilotWorkspacePort workspaces) =>
-        new() { OnAttach = () => workspaces.WorkspaceExists = true };
+        new()
+        {
+            OnAttachCommand = command =>
+            {
+                workspaces.WorkspaceExists = true;
+                workspaces.EnvironmentIdByDirectory[Path.GetFileName(command.ProjectDirectory)] = command.Environment.EnvironmentId;
+            },
+        };
 
     private static FakeCopilotWorkspacePort Fresh(out FakeCopilotWorkspacePort workspaces, bool connected = false)
     {
@@ -668,7 +675,8 @@ public sealed class ManagedAgentDeployServiceTests
         var (workspace, store) = Registered(DeploymentStages.Prod, "env-prod");
         using var _ = workspace;
         using var scope = new CurrentDirectoryScope(workspace.Root);
-        var attach = new RecordingAttachPort();
+        var workspaces = new FakeCopilotWorkspacePort();
+        var attach = Connecting(workspaces);
         var environments = ManagedAgentFixtures.Resolver(
             EnvironmentFixtures.Environment("env-1", instanceUrl: CopilotTestFixtures.DataverseOrganization),
             EnvironmentFixtures.Environment("env-prod", instanceUrl: CopilotTestFixtures.DataverseOrganization));
@@ -678,8 +686,8 @@ public sealed class ManagedAgentDeployServiceTests
             store,
             store,
             environments,
-            CopilotTestFixtures.Locator(new FakeCopilotWorkspacePort(), new SystemCopilotFileSystem()),
-            new CopilotWorkspaceService(new FakeCopilotWorkspacePort(), CopilotTestFixtures.Locator(new FakeCopilotWorkspacePort(), new SystemCopilotFileSystem())),
+            CopilotTestFixtures.Locator(workspaces, new SystemCopilotFileSystem()),
+            new CopilotWorkspaceService(workspaces, CopilotTestFixtures.Locator(workspaces, new SystemCopilotFileSystem())),
             ManagedAgentFixtures.Identities(),
             attach,
             new FakeCopilotCatalogPort(),

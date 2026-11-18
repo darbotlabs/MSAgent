@@ -22,10 +22,11 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
     private readonly ISyncDataverseClient _dataverseClient;
     private readonly IConnectionCatalogClient _catalogClient;
     private readonly ITokenProvider _tokenProvider;
+    private readonly IProfileCredentialProvider? _profileCredentials;
     private readonly AgentHostDataverseHttpClientAccessor _httpClientAccessor;
     private readonly IFileAccessorFactory _fileAccessors;
     private readonly DataverseWebApiClient _webApi;
-    private readonly Core.Environments.CoreServicesClusterCategory _cluster;
+    private readonly Func<Core.Environments.CoreServicesClusterCategory> _cluster;
 
     /// <summary>Creates the adapter.</summary>
     /// <param name="connections">The library's connection-management service.</param>
@@ -38,7 +39,15 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
     /// <param name="fileAccessors">Opens the workspace the sync library stores its state in.</param>
     /// <param name="webApi">Deletes the connectionreference record.</param>
     /// <param name="cluster">The cluster category the environment belongs to.</param>
-    public SyncConnectionAdapter(IConnectionManagementService connections, IWorkflowActivationService workflows, IWorkspaceSynchronizer synchronizer, ISyncDataverseClient dataverseClient, IConnectionCatalogClient catalogClient, ITokenProvider tokenProvider, AgentHostDataverseHttpClientAccessor httpClientAccessor, IFileAccessorFactory fileAccessors, DataverseWebApiClient webApi, Core.Environments.CoreServicesClusterCategory cluster)
+    /// <param name="profileCredentials">Acquires service credentials for captured profiles.</param>
+    public SyncConnectionAdapter(IConnectionManagementService connections, IWorkflowActivationService workflows, IWorkspaceSynchronizer synchronizer, ISyncDataverseClient dataverseClient, IConnectionCatalogClient catalogClient, ITokenProvider tokenProvider, AgentHostDataverseHttpClientAccessor httpClientAccessor, IFileAccessorFactory fileAccessors, DataverseWebApiClient webApi, Core.Environments.CoreServicesClusterCategory cluster,
+        IProfileCredentialProvider? profileCredentials = null)
+        : this(connections, workflows, synchronizer, dataverseClient, catalogClient, tokenProvider, httpClientAccessor, fileAccessors, webApi, () => cluster, profileCredentials)
+    {
+    }
+
+    internal SyncConnectionAdapter(IConnectionManagementService connections, IWorkflowActivationService workflows, IWorkspaceSynchronizer synchronizer, ISyncDataverseClient dataverseClient, IConnectionCatalogClient catalogClient, ITokenProvider tokenProvider, AgentHostDataverseHttpClientAccessor httpClientAccessor, IFileAccessorFactory fileAccessors, DataverseWebApiClient webApi, Func<Core.Environments.CoreServicesClusterCategory> cluster,
+        IProfileCredentialProvider? profileCredentials = null)
     {
         _connections = connections ?? throw new ArgumentNullException(nameof(connections));
         _workflows = workflows ?? throw new ArgumentNullException(nameof(workflows));
@@ -46,10 +55,11 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         _dataverseClient = dataverseClient ?? throw new ArgumentNullException(nameof(dataverseClient));
         _catalogClient = catalogClient ?? throw new ArgumentNullException(nameof(catalogClient));
         _tokenProvider = tokenProvider ?? throw new ArgumentNullException(nameof(tokenProvider));
+        _profileCredentials = profileCredentials;
         _httpClientAccessor = httpClientAccessor ?? throw new ArgumentNullException(nameof(httpClientAccessor));
         _fileAccessors = fileAccessors ?? throw new ArgumentNullException(nameof(fileAccessors));
         _webApi = webApi ?? throw new ArgumentNullException(nameof(webApi));
-        _cluster = cluster;
+        _cluster = cluster ?? throw new ArgumentNullException(nameof(cluster));
     }
 
     /// <inheritdoc />
@@ -57,7 +67,8 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
     {
         ArgumentNullException.ThrowIfNull(environment);
 
-        DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
+        using var lease = await DataverseTargeting.EnterAsync(_dataverseClient, cancellationToken).ConfigureAwait(false);
+        using var scope = DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
 
         var (workspaceFolder, definition, context) = await OpenAsync(environment, projectDirectory, cancellationToken).ConfigureAwait(false);
         var views = await _connections.GetAgentConnectionViewsAsync(workspaceFolder, definition, _dataverseClient, _catalogClient, context, cancellationToken).ConfigureAwait(false);
@@ -76,10 +87,11 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
     {
         ArgumentNullException.ThrowIfNull(environment);
 
-        DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
+        using var lease = await DataverseTargeting.EnterAsync(_dataverseClient, cancellationToken).ConfigureAwait(false);
+        using var scope = DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
 
         var (workspaceFolder, definition) = await ReadWorkspaceAsync(projectDirectory, cancellationToken).ConfigureAwait(false);
-        var views = await _connections.GetAgentConnectionViewsAsync(workspaceFolder, definition, _dataverseClient, _catalogClient, ContextFor(environment), cancellationToken).ConfigureAwait(false);
+        var views = await _connections.GetAgentConnectionViewsAsync(workspaceFolder, definition, _dataverseClient, _catalogClient, ContextFor(ResolvePowerAppsTarget(environment)), cancellationToken).ConfigureAwait(false);
 
         return [.. views
             .Where(view => view.IsDeclared)
@@ -110,7 +122,8 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(bindings);
 
-        DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
+        using var lease = await DataverseTargeting.EnterAsync(_dataverseClient, cancellationToken).ConfigureAwait(false);
+        using var scope = DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
 
         var (workspaceFolder, definition, context) = await OpenAsync(environment, projectDirectory, cancellationToken).ConfigureAwait(false);
 
@@ -143,7 +156,8 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectorInternalId);
 
-        var connections = await ListConnectionsCoreAsync(environment, await PowerAppsTokenAsync(environment, cancellationToken).ConfigureAwait(false), connectorInternalId, cancellationToken).ConfigureAwait(false);
+        var context = await PowerAppsContextAsync(environment, cancellationToken).ConfigureAwait(false);
+        var connections = await ListConnectionsCoreAsync(context, connectorInternalId, cancellationToken).ConfigureAwait(false);
 
         return [.. connections.Select(connection => new CopilotConnectionCandidate
         {
@@ -154,15 +168,15 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         })];
     }
 
-    private async Task<IReadOnlyList<ConnectionInstance>> ListConnectionsCoreAsync(CopilotEnvironmentContext environment, string accessToken, string connectorInternalId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<ConnectionInstance>> ListConnectionsCoreAsync(PowerAppsContext context, string connectorInternalId, CancellationToken cancellationToken)
     {
         try
         {
-            return await _catalogClient.ListConnectionsAsync(ContextFor(environment, accessToken), connectorInternalId, cancellationToken).ConfigureAwait(false);
+            return await _catalogClient.ListConnectionsAsync(context, connectorInternalId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception failure) when (PowerAppsFailure.IsNotFound(failure))
         {
-            throw new ConnectorNotFoundException(connectorInternalId, environment.EnvironmentId, failure);
+            throw new ConnectorNotFoundException(connectorInternalId, context.EnvironmentId, failure);
         }
     }
 
@@ -172,7 +186,8 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectorInternalId);
 
-        DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
+        using var lease = await DataverseTargeting.EnterAsync(_dataverseClient, cancellationToken).ConfigureAwait(false);
+        using var scope = DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
 
         var (workspaceFolder, definition) = await ReadWorkspaceAsync(projectDirectory, cancellationToken).ConfigureAwait(false);
 
@@ -185,7 +200,8 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentException.ThrowIfNullOrWhiteSpace(logicalName);
 
-        DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
+        using var lease = await DataverseTargeting.EnterAsync(_dataverseClient, cancellationToken).ConfigureAwait(false);
+        using var scope = DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
 
         var (workspaceFolder, definition) = await ReadWorkspaceAsync(projectDirectory, cancellationToken).ConfigureAwait(false);
         var result = await _connections.RemoveConnectionReferenceAsync(workspaceFolder, definition, logicalName, confirmed, cancellationToken).ConfigureAwait(false);
@@ -253,7 +269,8 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
             return new CopilotWorkflowActivation();
         }
 
-        DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
+        using var lease = await DataverseTargeting.EnterAsync(_dataverseClient, cancellationToken).ConfigureAwait(false);
+        using var scope = DataverseTargeting.Connect(_dataverseClient, _httpClientAccessor, environment);
 
         var workspaceFolder = new DirectoryPath(projectDirectory.Replace('\\', '/'));
         var requests = changes
@@ -282,21 +299,40 @@ public sealed class SyncConnectionAdapter : ICopilotConnectionPort, IConnectorCa
         return (workspaceFolder, definition, await PowerAppsContextAsync(environment, cancellationToken).ConfigureAwait(false));
     }
 
-    private async Task<PowerAppsContext> PowerAppsContextAsync(CopilotEnvironmentContext environment, CancellationToken cancellationToken) =>
-        ContextFor(environment, await PowerAppsTokenAsync(environment, cancellationToken).ConfigureAwait(false));
+    private async Task<PowerAppsContext> PowerAppsContextAsync(CopilotEnvironmentContext environment, CancellationToken cancellationToken)
+    {
+        var target = ResolvePowerAppsTarget(environment);
+        return ContextFor(target, await PowerAppsTokenAsync(target, cancellationToken).ConfigureAwait(false));
+    }
 
-    private PowerAppsContext ContextFor(CopilotEnvironmentContext environment, string? accessToken = null) =>
+    private readonly record struct ResolvedPowerAppsTarget(string EnvironmentId, string? TenantId,
+        EnvironmentResolutionContext? Context, CoreServicesClusterCategory Cluster, string Resource);
+
+    private ResolvedPowerAppsTarget ResolvePowerAppsTarget(CopilotEnvironmentContext environment)
+    {
+        var context = environment.Context;
+        var cluster = SyncClusterCategory.For(context is not null
+            ? Core.Environments.PowerAppsServiceTarget.ClusterFor(context)
+            : _cluster());
+        var resource = context is not null ? Core.Environments.PowerAppsServiceTarget.AudienceFor(context) : PowerAppsResource;
+        return new(environment.EnvironmentId, environment.TenantId, context, cluster, resource);
+    }
+
+    private static PowerAppsContext ContextFor(ResolvedPowerAppsTarget target, string? accessToken = null) =>
         new()
         {
             AccessToken = accessToken!,
-            EnvironmentId = environment.EnvironmentId,
-            ClusterCategory = SyncClusterCategory.For(_cluster),
+            EnvironmentId = target.EnvironmentId,
+            ClusterCategory = target.Cluster,
         };
 
-    private async Task<string> PowerAppsTokenAsync(CopilotEnvironmentContext environment, CancellationToken cancellationToken) =>
-        AcquiredTokenTenant.Require(
-            await _tokenProvider.AcquireTokenSilentAsync(PowerAppsResource, environment.TenantId, cancellationToken).ConfigureAwait(false),
-            environment.TenantId);
+    private async Task<string> PowerAppsTokenAsync(ResolvedPowerAppsTarget target, CancellationToken cancellationToken)
+    {
+        var tokens = CapturedSyncTokenProvider.For(_tokenProvider, _profileCredentials, target.Context);
+        return AcquiredTokenTenant.Require(
+            await tokens.AcquireTokenSilentAsync(target.Resource, target.TenantId, cancellationToken).ConfigureAwait(false),
+            target.TenantId);
+    }
 
     private async Task<(DirectoryPath Folder, DefinitionBase Definition)> ReadWorkspaceAsync(string projectDirectory, CancellationToken cancellationToken)
     {

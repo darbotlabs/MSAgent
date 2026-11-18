@@ -117,6 +117,7 @@ public sealed class ManagedAgentCreateService
 
         var displayName = _agentNames.Require(request.Name!.Trim(), "--agent-name");
         var environment = await _environmentResolver.ResolveAsync(request.EnvironmentId, cancellationToken).ConfigureAwait(false);
+        environment = await _principals.BindUserAsync(environment, cancellationToken).ConfigureAwait(false);
         var projectDirectory = ResolveProjectDirectory(request.Project);
         var agentLocation = _workspaces.ProjectFolderName(displayName);
         var workspaceDirectory = Path.Combine(projectDirectory, agentLocation);
@@ -135,7 +136,7 @@ public sealed class ManagedAgentCreateService
             },
             cancellationToken);
 
-        var stored = _registration.Register(projectDirectory, displayName, request.Description, agentLocation, environment.TenantId, environment.EnvironmentId, await _principals.ResolveAsync(cancellationToken).ConfigureAwait(false), scaffolded.SchemaName);
+        var stored = _registration.Register(projectDirectory, displayName, request.Description, agentLocation, environment.TenantId, environment.EnvironmentId, await _principals.ResolveAsync(environment, cancellationToken).ConfigureAwait(false), scaffolded.SchemaName);
 
         return new ManagedAgentCreateResult
         {
@@ -169,11 +170,12 @@ public sealed class ManagedAgentCreateService
             throw new UsageException("--schema-name is not used in clone mode. The agent's schema name comes from the source agent.");
         }
 
-        var projectDirectory = ResolveProjectDirectory(request.Project);
         var source = await _environmentResolver.ResolveAsync(request.CloneEnvironmentId ?? request.EnvironmentId, cancellationToken).ConfigureAwait(false);
         var target = string.IsNullOrWhiteSpace(request.EnvironmentId)
             ? source
-            : await _environmentResolver.ResolveAsync(request.EnvironmentId, cancellationToken).ConfigureAwait(false);
+            : await _environmentResolver.ResolveForContextAsync(source.Context!, request.EnvironmentId, cancellationToken).ConfigureAwait(false);
+        target = await _principals.BindUserAsync(target, cancellationToken).ConfigureAwait(false);
+        var projectDirectory = ResolveProjectDirectory(request.Project);
 
         var selector = string.IsNullOrWhiteSpace(request.CloneAgentId) ? request.CloneSchemaName!.Trim() : request.CloneAgentId!.Trim();
         var mcsAgentId = await _catalog.ResolveAgentIdAsync(source, selector, cancellationToken).ConfigureAwait(false)
@@ -189,7 +191,7 @@ public sealed class ManagedAgentCreateService
         var materialised = await MaterialiseOrFailAsync(projectDirectory, workspaceDirectory, source, mcsAgentId, cancellationToken).ConfigureAwait(false);
         var project = _projectIdentities.Find(workspaceDirectory);
         var description = string.IsNullOrWhiteSpace(request.Description) ? project?.Description : request.Description;
-        var stored = _registration.Register(projectDirectory, displayName, description, agentLocation, target.TenantId, target.EnvironmentId, await _principals.ResolveAsync(cancellationToken).ConfigureAwait(false), project?.SchemaName, SameEnvironment(source, target) ? mcsAgentId : null);
+        var stored = _registration.Register(projectDirectory, displayName, description, agentLocation, target.TenantId, target.EnvironmentId, await _principals.ResolveAsync(target, cancellationToken).ConfigureAwait(false), project?.SchemaName, SameEnvironment(source, target) ? mcsAgentId : null);
         var deployment = _homeDeployments.Register(projectDirectory, stored, target.EnvironmentId);
 
         return new ManagedAgentCreateResult

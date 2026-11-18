@@ -82,6 +82,8 @@ public sealed class ManagedAgentDeployService
         var (owner, deployment) = _resolver.ResolveAgentDeployment(projectDirectory, request.AgentId, request.AgentName, request.DeploymentId, request.DeploymentName, requireExplicitDeployment: true);
         var agent = ManagedAgentResolver.RequireMcsAgent(owner, "msagent agent deploy");
         var target = await _environmentResolver.ResolveAsync(ManagedAgentResolver.TargetEnvironmentId(agent, deployment), cancellationToken).ConfigureAwait(false);
+        target = await _principals.BindUserAsync(target, cancellationToken).ConfigureAwait(false);
+        var deployedBy = await _principals.ResolveAsync(target, cancellationToken).ConfigureAwait(false);
 
         var notices = new List<string>();
         var blockers = new List<string>();
@@ -156,9 +158,8 @@ public sealed class ManagedAgentDeployService
         }
 
         _progress.Report("Pushing changes");
-        var pushed = await PushAsync(projectDirectory, workspaceDirectory, deployment.DeploymentType, request.Overwrite || targetAgentCreated, request.Overwrite, target.EnvironmentId, schemaName, DescribeTarget(action, targetAgentCreated), cancellationToken).ConfigureAwait(false);
+        var pushed = await PushAsync(projectDirectory, workspaceDirectory, deployment.DeploymentType, request.Overwrite || targetAgentCreated, request.Overwrite, target, schemaName, DescribeTarget(action, targetAgentCreated), cancellationToken).ConfigureAwait(false);
         var deployedOn = _clock.UtcNow;
-        var deployedBy = await _principals.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         var activation = await _workflowActivation.RunAsync(target, workspaceDirectory, cancellationToken).ConfigureAwait(false);
 
@@ -231,8 +232,9 @@ public sealed class ManagedAgentDeployService
     private static IEnumerable<string> ExceptSupersededWorkflows(IReadOnlyList<string> warnings, bool passReported) =>
         passReported ? warnings.Where(warning => !DeployWarningText.IsRestatedByWorkflowCounts(warning)) : warnings;
 
-    private async Task<(int ComponentCount, int UploadedFileCount, int AuxiliaryCount, IReadOnlyList<string> Warnings, IReadOnlyList<string> CollectionWarnings)> PushAsync(string projectDirectory, string workspaceDirectory, string stage, bool overwrite, bool overwriteSharedEnvironmentVariables, string environmentId, string schemaName, string targetDescription, CancellationToken cancellationToken)
+    private async Task<(int ComponentCount, int UploadedFileCount, int AuxiliaryCount, IReadOnlyList<string> Warnings, IReadOnlyList<string> CollectionWarnings)> PushAsync(string projectDirectory, string workspaceDirectory, string stage, bool overwrite, bool overwriteSharedEnvironmentVariables, CopilotEnvironmentContext target, string schemaName, string targetDescription, CancellationToken cancellationToken)
     {
+        var environmentId = target.EnvironmentId;
         var collectionWarnings = new List<string>();
         var componentCount = 0;
         var uploadedFileCount = 0;
@@ -251,24 +253,25 @@ public sealed class ManagedAgentDeployService
                 continue;
             }
 
-            var pushedCollection = await PushWorkspaceAsync(collection, stage, overwrite, overwriteSharedEnvironmentVariables, environmentId, schemaName, targetDescription, cancellationToken).ConfigureAwait(false);
+            var pushedCollection = await PushWorkspaceAsync(collection, stage, overwrite, overwriteSharedEnvironmentVariables, target, schemaName, targetDescription, cancellationToken).ConfigureAwait(false);
             componentCount += pushedCollection.ComponentCount;
             uploadedFileCount += pushedCollection.UploadedFileCount;
             auxiliaryCount += pushedCollection.AuxiliaryCount;
             collectionWarnings.AddRange(pushedCollection.Warnings);
         }
 
-        var pushed = await PushWorkspaceAsync(workspaceDirectory, stage, overwrite, overwriteSharedEnvironmentVariables, environmentId, schemaName, targetDescription, cancellationToken).ConfigureAwait(false);
+        var pushed = await PushWorkspaceAsync(workspaceDirectory, stage, overwrite, overwriteSharedEnvironmentVariables, target, schemaName, targetDescription, cancellationToken).ConfigureAwait(false);
 
         return (componentCount + pushed.ComponentCount, uploadedFileCount + pushed.UploadedFileCount, auxiliaryCount + pushed.AuxiliaryCount, pushed.Warnings, collectionWarnings);
     }
 
-    private async Task<(int ComponentCount, int UploadedFileCount, int AuxiliaryCount, IReadOnlyList<string> Warnings)> PushWorkspaceAsync(string workspaceDirectory, string stage, bool overwrite, bool overwriteSharedEnvironmentVariables, string environmentId, string schemaName, string targetDescription, CancellationToken cancellationToken)
+    private async Task<(int ComponentCount, int UploadedFileCount, int AuxiliaryCount, IReadOnlyList<string> Warnings)> PushWorkspaceAsync(string workspaceDirectory, string stage, bool overwrite, bool overwriteSharedEnvironmentVariables, CopilotEnvironmentContext target, string schemaName, string targetDescription, CancellationToken cancellationToken)
     {
         try
         {
-            var pushed = await _workspaces.PushAsync(
+            var pushed = await _workspaces.PushForEnvironmentAsync(
                 new CopilotPushRequest { ProjectDirectory = workspaceDirectory, Overwrite = overwrite || stage != DeploymentStages.Dev, OverwriteSharedEnvironmentVariables = overwriteSharedEnvironmentVariables },
+                target,
                 cancellationToken).ConfigureAwait(false);
 
             return (pushed.ComponentCount, pushed.UploadedFileCount, pushed.AuxiliaryChangeCount, pushed.Warnings);
@@ -280,7 +283,7 @@ public sealed class ManagedAgentDeployService
         }
         catch (Exception failure) when (failure is not OperationCanceledException)
         {
-            throw ManagedAgentException.DeployIncomplete("push", schemaName, environmentId, targetDescription, failure);
+            throw ManagedAgentException.DeployIncomplete("push", schemaName, target.EnvironmentId, targetDescription, failure);
         }
     }
 
