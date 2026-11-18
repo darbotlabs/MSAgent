@@ -229,7 +229,7 @@ mean a change partially completed or its result is uncertain.
 | --- | --- |
 | [15001](ErrorCodes/15001.md) | The package publication target configuration is missing or incomplete. |
 | [15002](ErrorCodes/15002.md) | The configured endpoint cannot be used for a credential-bearing publication request. |
-| [15003](ErrorCodes/15003.md) | The local package selected for publication could not be read. |
+| [15003](ErrorCodes/15003.md) | The local package could not be read before or during upload; for in-flight or uncertain outcomes, check AMS state or request correlation before retrying. |
 | [15004](ErrorCodes/15004.md) | The package bytes read for publication differ from the recorded build digest. |
 | [15005](ErrorCodes/15005.md) | A publication redirect was not followed to protect delegated credentials. |
 | [15006](ErrorCodes/15006.md) | The upload timed out without confirming whether the package was persisted. |
