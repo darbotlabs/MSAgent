@@ -22,18 +22,21 @@ public sealed class AmsPackagePublicationAdapter : IAmsPackagePublicationTranspo
     private readonly ITokenProvider _tokens;
     private readonly PpapiTokenClaimsValidator _claimsValidator;
     private readonly IProfileResourceTokenProvider? _profileTokens;
+    private readonly TimeProvider _timeProvider;
 
     public AmsPackagePublicationAdapter(
         HttpClient httpClient,
         ITokenProvider tokens,
         PpapiTokenClaimsValidator? claimsValidator = null,
-        IProfileResourceTokenProvider? profileTokens = null)
+        IProfileResourceTokenProvider? profileTokens = null,
+        TimeProvider? timeProvider = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _httpClient.Timeout = Timeout.InfiniteTimeSpan;
         _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
         _claimsValidator = claimsValidator ?? new PpapiTokenClaimsValidator();
         _profileTokens = profileTokens;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<AmsPackagePublicationResult> PublishAsync(
@@ -69,13 +72,14 @@ public sealed class AmsPackagePublicationAdapter : IAmsPackagePublicationTranspo
         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         message.Headers.TryAddWithoutValidation(ClientRequestIdHeaderName, clientRequestId);
-        var content = new StreamContent(new BorrowedStream(request.PackageStream));
+        var packageStream = new BorrowedStream(request.PackageStream);
+        var content = new StreamContent(packageStream);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
         content.Headers.ContentLength = request.PackageLength;
         message.Content = content;
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(RequestTimeout);
+        using var deadlineCts = new CancellationTokenSource(RequestTimeout, _timeProvider);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineCts.Token);
 
         HttpResponseMessage response;
         try
@@ -86,14 +90,15 @@ public sealed class AmsPackagePublicationAdapter : IAmsPackagePublicationTranspo
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
-            throw PackagePublicationException.RequestTimedOut(
-                request.AgentId,
-                clientRequestId,
-                ex);
+            throw deadlineCts.IsCancellationRequested
+                ? PackagePublicationException.RequestTimedOut(request.AgentId, clientRequestId, ex)
+                : PackagePublicationException.RequestFailed(clientRequestId, ex);
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException)
         {
-            throw PackagePublicationException.RequestFailed(clientRequestId, ex);
+            throw packageStream.ReadFailure is { } readFailure
+                ? PackagePublicationException.RequestBodyReadFailed(clientRequestId, readFailure)
+                : PackagePublicationException.RequestFailed(clientRequestId, ex);
         }
 
         using (response)
@@ -115,18 +120,13 @@ public sealed class AmsPackagePublicationAdapter : IAmsPackagePublicationTranspo
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
-                throw PackagePublicationException.RequestTimedOut(
-                    request.AgentId,
-                    clientRequestId,
-                    ex);
+                throw deadlineCts.IsCancellationRequested
+                    ? PackagePublicationException.RequestTimedOut(request.AgentId, clientRequestId, ex, (int)response.StatusCode)
+                    : PackagePublicationException.RequestFailed(clientRequestId, ex, (int)response.StatusCode);
             }
-            catch (InvalidOperationException ex)
+            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or IOException)
             {
-                throw PackagePublicationException.RequestFailed(clientRequestId, ex);
-            }
-            catch (HttpRequestException ex)
-            {
-                throw PackagePublicationException.RequestFailed(clientRequestId, ex);
+                throw PackagePublicationException.RequestFailed(clientRequestId, ex, (int)response.StatusCode);
             }
             if (!response.IsSuccessStatusCode)
             {
@@ -368,19 +368,42 @@ public sealed class AmsPackagePublicationAdapter : IAmsPackagePublicationTranspo
     /// </summary>
     private sealed class BorrowedStream(Stream inner) : Stream
     {
+        public Exception? ReadFailure { get; private set; }
+
         public override bool CanRead => inner.CanRead;
         public override bool CanSeek => inner.CanSeek;
         public override bool CanWrite => false;
         public override long Length => inner.Length;
         public override long Position { get => inner.Position; set => inner.Position = value; }
         public override void Flush() => inner.Flush();
-        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            try
+            {
+                return inner.Read(buffer, offset, count);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                ReadFailure = ex;
+                throw;
+            }
+        }
         public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        public override ValueTask<int> ReadAsync(
+        public override async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
-            CancellationToken cancellationToken = default) =>
-            inner.ReadAsync(buffer, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                ReadFailure = ex;
+                throw;
+            }
+        }
     }
 }

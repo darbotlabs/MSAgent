@@ -119,7 +119,7 @@ public sealed class CliOutputRenderer
             partialReport = AuthPartial(partialState ?? error);
         var message = suppressExceptionDetails && error is not AgentHostingException
             ? "Authentication failed. No credential details were emitted." : Describe(error);
-        WriteFailure(exitCode, errorCode, message, errorKind, remediation, partialReport, json, error is ManagedAgentException { HasMultilineGuidance: true });
+        WriteFailure(exitCode, errorCode, message, errorKind, remediation, partialReport, json, error is ManagedAgentException { HasMultilineGuidance: true }, error as PackagePublicationException);
         return exitCode;
     }
 
@@ -180,7 +180,7 @@ public sealed class CliOutputRenderer
         return ExitCodes.Usage;
     }
 
-    private void WriteFailure(int exitCode, int errorCode, string message, string? errorKind, string? remediation, object? partialReport, bool json, bool multiline = false)
+    private void WriteFailure(int exitCode, int errorCode, string message, string? errorKind, string? remediation, object? partialReport, bool json, bool multiline = false, PackagePublicationException? publicationFailure = null)
     {
         if (json)
         {
@@ -199,6 +199,16 @@ public sealed class CliOutputRenderer
             if (remediation is not null)
             {
                 envelope["remediation"] = remediation;
+            }
+
+            if (publicationFailure?.FailureStage is { } stage)
+            {
+                envelope["failureStage"] = stage;
+                envelope["failureReason"] = publicationFailure.FailureReason;
+                if (publicationFailure.ResponseStatusCode is { } status)
+                {
+                    envelope["httpStatusCode"] = status;
+                }
             }
 
             if (partialReport is not null)
