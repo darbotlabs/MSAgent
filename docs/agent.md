@@ -8,6 +8,15 @@ To use this file with GitHub Copilot or Claude, attach it or explicitly say:
 "Read agent.md and follow it for this task." Do not assume this filename is
 automatically loaded by every assistant.
 
+## Optional coding-assistant plugin
+
+`msagent-assistant` provides guided Copilot Studio authoring and lifecycle
+workflows. See the [coding-assistant setup guide](Using%20msagents%20CLI%20with%20GitHub%20Copilot.md#msagent-assistant-plugin)
+for installation. When the plugin is available and a skill matches the task,
+invoke that skill and follow its required references. If it is unavailable or
+does not cover the task, continue using this guide and the installed CLI's help.
+Do not install or upgrade the plugin or its dependencies implicitly.
+
 ## Start here
 
 You need access to Copilot Studio and a suitable Power Platform environment.

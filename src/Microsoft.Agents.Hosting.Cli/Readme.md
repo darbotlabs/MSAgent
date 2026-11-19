@@ -4,6 +4,14 @@ Microsoft.Agents.Hosting.Cli is a .NET command-line tool for working with Micros
 
 This tool is intended for both humans and coding agents that need a consistent command interface to interact with the Agent Hosting platform.
 
+## Using a coding assistant
+
+The optional `msagent-assistant` plugin provides guided Copilot Studio authoring
+and lifecycle workflows. See the [coding-assistant setup guide](https://github.com/microsoft/AgentHosting.Cli/blob/main/docs/Using%20msagents%20CLI%20with%20GitHub%20Copilot.md#msagent-assistant-plugin)
+and provide [agent.md](https://github.com/microsoft/AgentHosting.Cli/blob/main/docs/agent.md)
+to your assistant. The plugin is installed separately; it is not included in this
+NuGet package.
+
 ## What this tool does
 
 The CLI supports the following core activities:
