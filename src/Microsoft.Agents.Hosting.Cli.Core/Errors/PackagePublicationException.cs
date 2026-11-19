@@ -98,7 +98,7 @@ public sealed class PackagePublicationException : AgentHostingException
             $"The Agent Management Service package upload for Agent '{agentId}' exceeded its configured deadline {DescribeStage(responseStatusCode)} (clientRequestId={clientRequestId}). The upload outcome may be indeterminate.",
             ExitCodes.Failure,
             "publication-timeout",
-            "Do not retry blindly. Check AMS package state or service-side correlation for this client request before deciding whether another upload is required.",
+            "Check network connectivity. Avoid repeated uploads while the outcome is uncertain. Report persistent failures in microsoft/AgentHosting.Cli with the error output, agent ID, client request ID, and time of failure, without including tokens or credentials.",
             innerException)
         {
             FailureStage = responseStatusCode.HasValue ? "response-body" : "request",
@@ -115,7 +115,7 @@ public sealed class PackagePublicationException : AgentHostingException
             $"The Agent Management Service package upload failed {DescribeStage(responseStatusCode)} (failureReason={ClassifyTransportFailure(innerException)}, clientRequestId={clientRequestId}). The upload outcome may be indeterminate.",
             ExitCodes.Failure,
             "publication-transport-failed",
-            "Do not retry blindly. Check AMS package state or service-side correlation for this client request before deciding whether another upload is required.",
+            "Check network connectivity. Avoid repeated uploads while the outcome is uncertain. Report persistent failures in microsoft/AgentHosting.Cli with the error output, agent ID, client request ID, and time of failure, without including tokens or credentials.",
             innerException)
         {
             FailureStage = responseStatusCode.HasValue ? "response-body" : "request",
@@ -131,7 +131,7 @@ public sealed class PackagePublicationException : AgentHostingException
             $"The local package could not be read while uploading (clientRequestId={clientRequestId}). The upload outcome may be indeterminate.",
             ExitCodes.Failure,
             "package-read-failed",
-            "Check that the package remains readable. Check AMS package state before deciding whether another upload is required.",
+            "Check that the package remains readable and is not being changed concurrently. Avoid repeated uploads while the outcome is uncertain. Report persistent failures in microsoft/AgentHosting.Cli with the error output, agent ID, client request ID, and time of failure, without including tokens or credentials.",
             innerException)
         {
             FailureStage = "request-body",
