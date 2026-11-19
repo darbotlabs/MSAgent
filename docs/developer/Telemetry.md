@@ -24,6 +24,14 @@ attempt, false means no failure has been reported, not that execution completed.
 Failure events can include `errorCode` as the string form of the numeric CLI
 error code in the same dimensions.
 
+Package-upload command output additionally distinguishes transport failures with
+allowlisted `failureStage` and `failureReason` values, and `httpStatusCode` when
+response headers were received. These fields do not contain exception messages,
+response bodies, paths, or credentials and are not added to command telemetry.
+Existing numeric error codes and error kinds remain unchanged, except that an
+unexplained transport cancellation is no longer misclassified as deadline expiry,
+and a local read failure during upload uses the package-read failure code.
+
 ## Identity and privacy
 
 After collection policy enables an invocation, normal command authentication may
