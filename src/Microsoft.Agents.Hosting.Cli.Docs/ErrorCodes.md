@@ -155,7 +155,7 @@ mean a change partially completed or its result is uncertain.
 
 | Code | Description |
 | --- | --- |
-| [13001](ErrorCodes/13001.md) | An endpoint or inventory identifier failed destination trust validation. |
+| [13001](ErrorCodes/13001.md) | An endpoint or inventory identifier failed destination trust validation for the selected cloud and API ring. |
 | [13002](ErrorCodes/13002.md) | The active cloud changed after this process created its service clients. |
 | [13003](ErrorCodes/13003.md) | The command requires an environment but no active selection is available. |
 | [13004](ErrorCodes/13004.md) | The requested environment is absent from the active account's inventory. |
