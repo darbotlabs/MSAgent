@@ -1,23 +1,56 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, open, stat } from "node:fs/promises";
 import path from "node:path";
 
 export async function resolveExecutable(configured, environment = process.env) {
-    const name = process.platform === "win32" ? "msagent.exe" : "msagent";
+    const windows = process.platform === "win32";
+    const name = windows ? "msagent.cmd" : "msagent";
     const candidates = configured ? [configured] : (environment.PATH ?? "")
         .split(path.delimiter).filter(directory => path.isAbsolute(directory))
         .map(directory => path.join(directory, name));
     for (const candidate of candidates) {
         if (!path.isAbsolute(candidate)) throw new Error("The msagent executable path must be absolute.");
+        if (windows && !/\.(?:exe|cmd)$/i.test(candidate)) {
+            throw new Error("Supply a native .exe or the standard .NET 10 msagent.cmd launcher.");
+        }
         try {
             await access(candidate, constants.X_OK);
-            return candidate;
         } catch (error) {
             if (!["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) throw error;
+            continue;
         }
+        return windows && /\.cmd$/i.test(candidate) ? resolveWindowsLauncher(candidate) : candidate;
     }
     throw new Error("msagent was not found. Install a compatible CLI or supply its absolute executable path.");
+}
+
+async function resolveWindowsLauncher(launcher) {
+    const file = await open(launcher, "r");
+    let source;
+    try {
+        const buffer = Buffer.alloc(8193);
+        let length = 0;
+        while (length < buffer.length) {
+            const { bytesRead } = await file.read(buffer, length, buffer.length - length, length);
+            if (!bytesRead) break;
+            length += bytesRead;
+        }
+        source = length <= 8192 ? buffer.subarray(0, length).toString("utf8") : "";
+    } finally {
+        await file.close();
+    }
+    // Interpret only the current SDK's forwarding template; never execute batch source.
+    const match = /^@echo off\r?\n"%~dp0(\.store\\microsoft\.agents\.hosting\.cli\\([0-9][0-9A-Za-z.+-]*)\\microsoft\.agents\.hosting\.cli\.(win-(?:x64|x86|arm64))\\\2\\tools\\net10\.0\\\3\\Microsoft\.Agents\.Hosting\.Cli\.exe)" %\*(?:\r?\n)?$/i.exec(source);
+    if (!match) throw new Error("msagent.cmd is not a standard .NET 10 launcher. Supply the native CLI executable path.");
+    const executable = path.join(path.dirname(launcher), match[1]);
+    try {
+        await access(executable, constants.X_OK);
+        if (!(await stat(executable)).isFile()) throw new Error("Not a file.");
+    } catch {
+        throw new Error("The msagent launcher target is unavailable. Repair this installation or supply its native executable path.");
+    }
+    return executable;
 }
 
 export function runCommand(executable, args, { signal, timeout = 120_000, limit = 4 * 1024 * 1024, onStdout } = {}) {
@@ -36,7 +69,9 @@ export function runCommand(executable, args, { signal, timeout = 120_000, limit 
         };
         if (signal?.aborted) return reject(new Error("Cancelled. Remote effects may continue if a message was sent."));
         try {
-            child = spawn(executable, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+            // Windows tool-store paths can exceed CreateProcess's ordinary MAX_PATH limit.
+            const command = process.platform === "win32" ? path.toNamespacedPath(executable) : executable;
+            child = spawn(command, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
         } catch {
             return reject(new Error("msagent could not be started."));
         }

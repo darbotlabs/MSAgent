@@ -82,7 +82,7 @@ export async function downloadPublicFile(address, signal, redirects = 0) {
 function validName(name) {
     return typeof name === "string" && name.length > 0 && name.length <= 200 &&
         !/[\\/:<>?"*|\x00-\x1f\x7f]/.test(name) && !/^[. ]+$|[. ]$/.test(name) &&
-        !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name);
+        !/^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?: *\.|$)/i.test(name);
 }
 
 export function uploads(input = []) {

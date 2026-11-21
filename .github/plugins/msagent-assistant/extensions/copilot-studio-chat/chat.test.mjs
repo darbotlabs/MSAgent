@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { request } from "node:http";
-import { access, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
@@ -161,6 +161,7 @@ test("uploads validate filenames, encoding, count and size and remove staged fil
     assert.equal(uploads([{ name: "maximum.bin", base64: Buffer.alloc(10 * 1024 * 1024).toString("base64") }])[0].size, 10 * 1024 * 1024);
     for (const input of [
         [{ name: "../private", base64: "AQID" }], [{ name: "CON.txt", base64: "AQID" }],
+        ...["CON .txt", "CONIN$", "conout$.txt", "COM\u00b9.txt", "LPT\u00b2.log"].map(name => [{ name, base64: "AQID" }]),
         [{ name: "file", base64: "***" }],
         Array(6).fill({ name: "file", base64: "" }),
         [{ name: "large", base64: Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64") }],
@@ -2344,10 +2345,65 @@ test("process runner bounds output, propagates exit codes and cancels without a 
     await assert.rejects(resolveExecutable(undefined, { PATH: "." }), /not found/);
 });
 
-test("the CLI is launched through its PATH entry, not the resolved symlink target", async () => {
+test("Windows discovery resolves only the standard .NET 10 launcher to its exact native apphost", { skip: process.platform !== "win32" }, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "msagent path & literal-"));
+    const directory = path.join(root, "isolated installation with a deliberately long path", "tool");
+    try {
+        const relative = ".store\\microsoft.agents.hosting.cli\\0.2.168-beta-gfixture\\microsoft.agents.hosting.cli.win-x64\\0.2.168-beta-gfixture\\tools\\net10.0\\win-x64\\Microsoft.Agents.Hosting.Cli.exe";
+        const native = path.join(directory, relative);
+        assert(native.length > 260);
+        await mkdir(path.dirname(native), { recursive: true });
+        await copyFile(process.execPath, native);
+        const launcher = path.join(directory, "msagent.cmd");
+        const standard = `@echo off\r\n"%~dp0${relative}" %*\r\n`;
+        await writeFile(launcher, standard);
+        assert.equal(await resolveExecutable(undefined, { PATH: directory }), native);
+        assert.equal(await resolveExecutable(launcher), native);
+        assert.equal(await resolveExecutable(native), native);
+        const args = ['--query=quotes " & | < > %PATH% !value! ^ $(no-command)\nnext', "C:\\project with spaces\\", "@response.txt"];
+        const result = await runCommand(native, ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...args]);
+        assert.equal(result.code, 0);
+        assert.deepEqual(JSON.parse(result.output), args);
+        for (const invalid of [
+            standard + "echo unexpected\r\n",
+            standard.replace("%*", "extra %*"),
+            standard.replace("%~dp0.store", "%~dp0..\\other"),
+            standard.replace("net10.0", "net9.0"),
+            standard.replace(/0.2.168-beta-gfixture(?=\\tools)/, "0.2.999"),
+            standard.replaceAll("0.2.168-beta-gfixture", ".."),
+            "x".repeat(8193),
+        ]) {
+            await writeFile(launcher, invalid);
+            await assert.rejects(resolveExecutable(undefined, { PATH: [directory, path.dirname(process.execPath)].join(path.delimiter) }), /standard .NET 10/);
+        }
+        await writeFile(launcher, standard);
+        await rm(native);
+        await assert.rejects(resolveExecutable(undefined, { PATH: directory }), /launcher target/);
+        await assert.rejects(resolveExecutable(path.join(directory, "other.bat")), /native .exe|standard .NET 10/);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test("staged file paths and query arguments survive native process invocation literally", async () => {
+    const query = '--option "quoted" & | %PATH% !variable! ^\nnext';
+    const selected = { ...target, project: path.join(tmpdir(), "project with spaces"), agentId: "agent", deploymentId: "draft" };
+    let staged;
+    await withUploadedFiles(uploads([{ name: "report & notes.txt", base64: "AQID" }]), async paths => {
+        staged = paths[0];
+        const args = [...askArguments(selected, query, "conversation"), "--file", ...paths];
+        const result = await runCommand(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...args]);
+        assert.equal(result.code, 0);
+        assert.deepEqual(JSON.parse(result.output), args);
+        assert.deepEqual(await readFile(staged), Buffer.from([1, 2, 3]));
+    });
+    await assert.rejects(access(staged));
+});
+
+test("the CLI is launched through its Unix PATH entry, not the resolved symlink target", { skip: process.platform === "win32" }, async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "msagent-path-"));
     try {
-        const link = path.join(directory, process.platform === "win32" ? "msagent.exe" : "msagent");
+        const link = path.join(directory, "msagent");
         await symlink(process.execPath, link);
         assert.equal(await resolveExecutable(undefined, { PATH: directory }), link);
     } finally {

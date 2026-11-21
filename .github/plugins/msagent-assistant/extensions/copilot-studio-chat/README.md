@@ -69,10 +69,20 @@ headings. Without it, headings use the target's schema name or local agent ID.
 This label does not change the selected target.
 
 Optionally add `executablePath` with the absolute path to the compatible
-msagent executable. Otherwise the extension resolves `msagent` (`msagent.exe`
-on Windows) from absolute PATH entries. It does not execute `.cmd` shims through
-a shell; point at the actual CLI executable when needed. For a local contributor
-build, use the apphost under `src/Microsoft.Agents.Hosting.Cli/bin/Debug/net10.0/`.
+msagent native executable. On Windows, discovery looks for the current .NET 10
+`msagent.cmd` launcher in absolute PATH entries, reads only the standard forwarding
+template, and starts its exact tool-store `.exe` with no shell. An absolute path
+to that launcher is also accepted. Arbitrary batch scripts, legacy launcher
+layouts and guessed tool-store versions are not supported. If the first discovered
+launcher is invalid or its target is missing, fix that installation or supply
+the native executable path; another installation is not silently selected.
+On macOS/Linux, discovery still invokes the `msagent` PATH entry, including
+symlinks, without resolving it to a different executable path. For a local
+contributor build, supply the apphost under
+`src/Microsoft.Agents.Hosting.Cli/bin/Debug/net10.0/`
+(`Microsoft.Agents.Hosting.Cli.exe` on Windows).
+Windows native invocation uses an extended-length executable path so deeply
+nested tool installations can start; query and file arguments remain literal.
 
 Each canvas has its own conversation and transcript, even if another canvas uses
 the same `chatId`. Reopening an existing panel reuses its conversation. Closing a
@@ -236,6 +246,8 @@ nonblank message. Files can be removed
 before sending. The extension stages private temporary files, passes only their
 paths to `test ask --file`, and deletes them after the invocation, including
 failures and cancellation. The transcript retains names and sizes, not upload bytes.
+Windows device names (including console devices and numbered-device aliases),
+path separators and trailing dots/spaces are rejected on every platform.
 The installed CLI must support `--file`; the agent controls which file types it accepts.
 
 File attachments returned by the agent have **Download** buttons. Downloads use
@@ -290,7 +302,14 @@ npm --prefix .github/plugins/msagent-assistant/scripts test
 ```
 
 Tests use fake CLI results and local Node subprocesses, not cached credentials
-or live agents. Reloading extensions resumes the conversations in open
+or live agents. Windows and Linux CI already run the plugin suite; macOS CI
+also runs the canvas tests. Windows isolated installed-package acceptance uses
+the actual built .NET tool's launcher for canvas discovery and `test ask --help`
+capability checks, without sign-in or starting a conversation. Launcher fixtures
+cover spaces, executable paths over 260 characters, literal arguments,
+unsupported templates and missing targets;
+the Unix symlink fixture does not require Windows symlink privileges.
+Reloading extensions resumes the conversations in open
 canvases. Discovery, capability and status checks are read-only; opening a new
 configured canvas starts a live conversation. Live acceptance requires explicit
 target/effects approval and a record following `docs/developer/ManualTesting.md`;
