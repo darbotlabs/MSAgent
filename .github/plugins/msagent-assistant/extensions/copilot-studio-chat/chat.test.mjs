@@ -26,6 +26,23 @@ const streamed = (text, sequence, type = "streaming", id = "reply") => ({
     type: "message", text, entities: [{ type: "streaminfo", streamId: id, streamSequence: sequence, streamType: type }],
 });
 
+function fixtureScript(source) {
+    return source.replace(/^import .*;\r?\n/gm, "");
+}
+
+for (const [name, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+    test(`VM fixtures remove module imports with ${name} line endings`, () => {
+        const source = [
+            'import { renderMarkdown } from "./markdown.mjs";',
+            'import { Chat } from "./chat.mjs";',
+            'renderMarkdown("Hello");',
+        ].join(newline);
+        let rendered;
+        runInNewContext(fixtureScript(source), { renderMarkdown(text) { rendered = text; } });
+        assert.equal(rendered, "Hello");
+    });
+}
+
 test("conversation data records activities, envelopes and messages verbatim without aliasing them", () => {
     const data = new ConversationData();
     const event = { type: "event", name: "ToolInvocation", value: { tool: "weather", access_token: "token-value",
@@ -509,7 +526,7 @@ async function uiFixture(state, respond = () => undefined) {
         if (custom !== undefined) return custom;
         return { ok: true, json: async () => structuredClone(route === "/state" ? state : { accepted: true }) };
     };
-    const script = (await readFile(new URL("app.js", import.meta.url), "utf8")).replace(/^import .*;\n/, "");
+    const script = fixtureScript(await readFile(new URL("app.js", import.meta.url), "utf8"));
     const document = { getElementById: get, createElement: node,
         addEventListener(event, handler) { documentEvents[event] = handler; } };
     runInNewContext(script, {
@@ -1379,7 +1396,7 @@ test("setup requests are deduplicated and failures remain visible until an expli
 });
 
 test("the declared canvas opens without input and setup never invokes the CLI", async () => {
-    const script = (await readFile(new URL("extension.mjs", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
+    const script = fixtureScript(await readFile(new URL("extension.mjs", import.meta.url), "utf8"));
     let declaration;
     let cliCalls = 0;
     const requests = [];
@@ -1440,7 +1457,7 @@ test("the declared canvas opens without input and setup never invokes the CLI", 
 
 test("a menu canvas is configured in place and resumes without starting another conversation", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "canvas-handoff-"));
-    const script = (await readFile(new URL("extension.mjs", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
+    const script = fixtureScript(await readFile(new URL("extension.mjs", import.meta.url), "utf8"));
     const chats = [];
     const requests = [];
     const input = { chatId: "selected", agentName: "Example Agent", target };
