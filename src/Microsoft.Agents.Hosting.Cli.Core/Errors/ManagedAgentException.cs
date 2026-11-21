@@ -376,6 +376,9 @@ public sealed class ManagedAgentException : AgentHostingException
     /// <returns>The failure.</returns>
     public static ManagedAgentException WorkflowManaged(string message) => new(ErrorCodes.ManagedAgent.WorkflowManaged, message, ExitCodes.Usage, "workflow-managed", "Clone the flow from the environment where its solution is unmanaged, or pick a workflow `msagent agent list --agent-type MCSWorkflow` shows.");
 
+    /// <summary>Carries the sync library's report that the agent is managed, so it cannot be cloned.</summary>
+    public static ManagedAgentException AgentManaged(string message) => new(ErrorCodes.ManagedAgent.AgentManaged, message, ExitCodes.Usage, "agent-managed", "Run the command again against the environment where the agent's solution is unmanaged: pass it as --mcs-clone-environment-id to `msagent agent create`, or as --environment-id to `msagent agent copy`.");
+
     /// <summary>A workflow name is one Dataverse would refuse or no folder name could carry.</summary>
     /// <param name="reason">Why the name cannot be used.</param>
     /// <returns>The failure.</returns>
@@ -753,7 +756,7 @@ public sealed class ManagedAgentException : AgentHostingException
         $"No connection reference was declared for {connectorId} in {environmentId}: {failure.Message}",
         ExitCodes.Failure,
         "connection-reference-not-declared",
-        $"The reference is created in the environment before it is written to the workspace, so retrying may leave an unused reference behind in {environmentId}. Run `{listCommand}` to see what the workspace declares before retrying.",
+        $"Declaring a reference only writes it to the workspace; {environmentId} gets its record when the reference is bound or deployed. Run `{listCommand}` to see what the workspace declares before retrying.",
         failure);
 
     /// <summary>The service refused to delete a connection.</summary>

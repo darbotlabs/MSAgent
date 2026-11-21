@@ -94,7 +94,7 @@ mean a change partially completed or its result is uncertain.
 | [11028](ErrorCodes/11028.md) | Removal of the workspace's connection-reference declaration could not be confirmed. |
 | [11029](ErrorCodes/11029.md) | The workspace does not declare the requested logical reference name. |
 | [11030](ErrorCodes/11030.md) | The reference exists, but a later binding step failed. |
-| [11031](ErrorCodes/11031.md) | Declaration failed and may have left a cloud reference absent from the workspace. |
+| [11031](ErrorCodes/11031.md) | The connection reference could not be declared in the workspace. |
 | [11032](ErrorCodes/11032.md) | The service returned an unsuccessful response to the connection deletion request. |
 | [11033](ErrorCodes/11033.md) | The reference is already gone, but connection deletion failed or remains uncertain. |
 | [11034](ErrorCodes/11034.md) | A new connection survived after both sign-in and automatic cleanup failed. |
@@ -125,6 +125,7 @@ mean a change partially completed or its result is uncertain.
 | [11059](ErrorCodes/11059.md) | Preparing the copy found blockers, so nothing was written or sent. |
 | [11067](ErrorCodes/11067.md) | Another copy into the same project is running. |
 | [11069](ErrorCodes/11069.md) | The agent was deleted, but some of the resources `--all-resources` deletes were not. |
+| [11070](ErrorCodes/11070.md) | The agent belongs to a managed solution, so it cannot be cloned. |
 
 ## Authentication
 
@@ -299,6 +300,7 @@ mean a change partially completed or its result is uncertain.
 | [17032](ErrorCodes/17032.md) | A persistent missing-reference refusal stopped the component push. |
 | [17033](ErrorCodes/17033.md) | A persistent duplicate-component refusal stopped the component push. |
 | [17034](ErrorCodes/17034.md) | The deploy would overwrite shared environment variables the target environment already holds. |
+| [17035](ErrorCodes/17035.md) | The pull stopped because the environment deleted or replaced locally edited knowledge files that it can't keep. |
 
 ## Evaluation
 

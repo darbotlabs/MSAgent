@@ -107,7 +107,6 @@ public static class OptionCatalog
         ["--provider-name"] = "-pn",
         ["--publish"] = "-pub",
         ["--query"] = "-q",
-        ["--published"] = "-pubd",
         ["--redirect-uri"] = "-ru",
         ["--replace"] = "-rep",
         ["--remove-page"] = "-rmp",
