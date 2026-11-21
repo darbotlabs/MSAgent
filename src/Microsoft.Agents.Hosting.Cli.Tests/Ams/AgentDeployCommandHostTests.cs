@@ -176,14 +176,52 @@ public sealed class AgentDeployCommandHostTests
         }
     }
 
-    [Fact]
-    public void PackageUpload_IndeterminateFailure_DoesNotInventDurableOperationIdentity()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PackageUpload_IndeterminateFailure_ReportsSafeClassificationWithoutDurableIdentity(bool json)
     {
         var operations = new FakeOperations
         {
             OnAgentPackageUpload = _ => throw PackagePublicationException.RequestFailed(
                 "client-request-id",
-                new HttpRequestException("private-response-detail")),
+                new HttpRequestException(HttpRequestError.ResponseEnded, "private-response-detail")),
+        };
+
+        var (exitCode, stdout, stderr) = Run(operations, json ? [.. UploadArgs(), "--json"] : UploadArgs());
+
+        Assert.Equal(ExitCodes.Failure, exitCode);
+        Assert.DoesNotContain("private-response-detail", stdout + stderr, StringComparison.Ordinal);
+        if (!json)
+        {
+            Assert.Empty(stdout);
+            Assert.Contains("failureReason=response-ended", stderr, StringComparison.Ordinal);
+            return;
+        }
+
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal("publication-transport-failed", root.GetProperty("errorKind").GetString());
+        Assert.Equal(15007, root.GetProperty("errorCode").GetInt32());
+        Assert.Equal("request", root.GetProperty("failureStage").GetString());
+        Assert.Equal("response-ended", root.GetProperty("failureReason").GetString());
+        Assert.False(root.TryGetProperty("httpStatusCode", out _));
+        Assert.False(root.TryGetProperty("partialResult", out _));
+        Assert.Contains("indeterminate", root.GetProperty("errorMessage").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("private-response-detail", stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PackageUpload_ResponseBodyFailure_ReportsReceivedStatusWithoutResponseDetails()
+    {
+        var operations = new FakeOperations
+        {
+            OnAgentPackageUpload = _ => throw PackagePublicationException.RequestFailed(
+                "client-request-id",
+                new HttpRequestException(HttpRequestError.ResponseEnded, "private-response-detail"),
+                503),
         };
 
         var (exitCode, stdout, stderr) = Run(operations, [.. UploadArgs(), "--json"]);
@@ -192,10 +230,10 @@ public sealed class AgentDeployCommandHostTests
         Assert.Empty(stderr);
         using var document = JsonDocument.Parse(stdout);
         var root = document.RootElement;
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.Equal("publication-transport-failed", root.GetProperty("errorKind").GetString());
-        Assert.False(root.TryGetProperty("partialResult", out _));
-        Assert.Contains("indeterminate", root.GetProperty("errorMessage").GetString(), StringComparison.Ordinal);
+        Assert.Equal("response-body", root.GetProperty("failureStage").GetString());
+        Assert.Equal("response-ended", root.GetProperty("failureReason").GetString());
+        Assert.Equal(503, root.GetProperty("httpStatusCode").GetInt32());
+        Assert.DoesNotContain("before response", root.GetProperty("errorMessage").GetString(), StringComparison.Ordinal);
         Assert.DoesNotContain("private-response-detail", stdout, StringComparison.Ordinal);
     }
 
