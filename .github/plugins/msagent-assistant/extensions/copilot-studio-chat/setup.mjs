@@ -18,11 +18,15 @@ export class SetupChat {
         return this.chat?.files;
     }
 
+    get pending() {
+        return this.chat ? this.chat.pending : this.setupPending;
+    }
+
     async configure(input) {
         if (this.closed) throw new Error("This canvas is closed.");
         if (this.chat || this.configuring) throw new Error("This canvas already has an agent or is being configured.");
         this.configuring = (async () => {
-            await this.pending;
+            await this.setupPending;
             if (this.closed) throw new Error("This canvas is closed.");
             this.state.busy = true;
             this.state.operation = "configure";
@@ -58,7 +62,7 @@ export class SetupChat {
         this.state.busy = true;
         this.state.operation = "setup";
         this.state.error = null;
-        this.pending = Promise.resolve().then(() => this.requestSetup()).then(() => {
+        this.setupPending = Promise.resolve().then(() => this.requestSetup()).then(() => {
             this.state.setupRequested = true;
         }).catch(error => {
             this.state.error = `Could not ask Copilot to choose an agent: ${error.message}`;
@@ -66,7 +70,7 @@ export class SetupChat {
             this.state.busy = false;
             this.state.operation = null;
         });
-        return this.pending;
+        return this.setupPending;
     }
 
     cancel() {
@@ -76,7 +80,7 @@ export class SetupChat {
 
     async close() {
         this.closed = true;
-        await this.pending;
+        await this.setupPending;
         await this.configuring?.catch(() => {});
         await this.chat?.close();
     }

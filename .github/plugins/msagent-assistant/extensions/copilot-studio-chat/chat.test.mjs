@@ -1561,6 +1561,117 @@ test("closing while setup is being saved never starts a live conversation", asyn
     }
 });
 
+for (const operation of ["send", "reset"]) {
+    test(`queued Copilot ${operation} does not run after the panel closes`, async () => {
+        let waiting, finish;
+        const waited = new Promise(resolve => { waiting = resolve; });
+        const turn = new Promise(resolve => { finish = resolve; });
+        let starts = 0;
+        const chat = {
+            snapshot: () => ({ busy: true, messages: [] }),
+            get pending() { waiting(); return turn; },
+            start() { starts++; },
+        };
+        const registry = new ChatRegistry(async () => ({ chat, server: { close: async () => { finish(); } } }));
+        await registry.open("panel", { chatId: "closing", target });
+        const action = operation === "send"
+            ? registry.send("panel", "Do not send", async () => {})
+            : registry.newChat("panel");
+        const rejected = assert.rejects(action, /closed/);
+        await waited;
+        await registry.close("panel");
+        await rejected;
+        assert.equal(starts, 0);
+    });
+}
+
+for (const greeting of [false, true]) {
+    test(`transcript capacity remains restorable ${greeting ? "with" : "without"} an opening greeting`, async () => {
+        const { chat, calls } = fixture();
+        if (greeting) await chat.start("connect");
+        for (let index = 0; index < 49; index++) await chat.start("send", { query: `Message ${index}` });
+        if (!greeting) await chat.start("send", { query: "Last permitted exchange" });
+        const before = calls.length;
+        assert.throws(() => chat.start("send", { query: "Over the limit" }), /reached its limit/);
+        assert.equal(calls.length, before);
+        assert.equal(chat.snapshot().messages.length, greeting ? 99 : 100);
+        const restored = fixture().chat;
+        await restored.start("check");
+        assert.equal(restored.restore(chat.saved()), true);
+        assert.deepEqual(restored.snapshot().messages, chat.saved().messages);
+    });
+}
+
+for (const active of ["connect", "send"]) {
+    for (const operation of ["send", "reset"]) {
+        test(`configured menu canvas waits for ${active} before Copilot ${operation}`, async () => {
+            let hold = active === "connect";
+            let entered, finish;
+            const started = new Promise(resolve => { entered = resolve; });
+            const current = fixture(args => hold && args[1] === "ask" && !args.includes("--help")
+                ? new Promise(resolve => { entered(); finish = () => { hold = false; resolve(json(outcome)); }; })
+                : undefined);
+            const setup = new SetupChat(async () => {}, async () => {
+                current.chat.start("connect");
+                return current.chat;
+            });
+            const registry = new ChatRegistry(async () => ({ chat: setup, server: { close: () => setup.close() } }));
+            await registry.open("panel", {});
+            await registry.configure("panel", { chatId: "configured", target });
+            if (active === "send") {
+                await setup.pending;
+                hold = true;
+                setup.start("send", { query: "Active user message" });
+            }
+            await started;
+            try {
+                assert.equal(setup.pending, current.chat.pending);
+                const action = operation === "send"
+                    ? registry.send("panel", "Queued Copilot message", async () => {})
+                    : registry.newChat("panel");
+                action.catch(() => {});
+                await new Promise(setImmediate);
+                finish();
+                const result = await action;
+                await setup.pending;
+                assert.equal(result.status, operation === "send" ? "sending" : "ready");
+                assert.equal(setup.snapshot().messages.length, operation === "reset" ? 1 : active === "connect" ? 3 : 5);
+            } finally {
+                finish();
+                await registry.close("panel");
+            }
+        });
+    }
+}
+
+test("closing a configured menu canvas cancels its active opening conversation", async () => {
+    let entered, finish, signal;
+    const started = new Promise(resolve => { entered = resolve; });
+    const current = fixture((args, options) => args[1] === "ask" && !args.includes("--help")
+        ? new Promise((resolve, reject) => {
+            signal = options.signal;
+            finish = () => resolve(json(outcome));
+            signal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+            entered();
+        })
+        : undefined);
+    const setup = new SetupChat(async () => {}, async () => {
+        current.chat.start("connect");
+        return current.chat;
+    });
+    await setup.configure({ chatId: "closing", target });
+    await started;
+    const closing = setup.close();
+    try {
+        await new Promise(setImmediate);
+        assert.equal(signal.aborted, true);
+    } finally {
+        finish();
+        await closing;
+    }
+    assert.equal(current.chat.snapshot().busy, false);
+});
+
 test("Copilot's sends return at once and push only their own replies", async () => {
     let fail = false;
     const current = fixture(args => fail && args[1] === "ask"

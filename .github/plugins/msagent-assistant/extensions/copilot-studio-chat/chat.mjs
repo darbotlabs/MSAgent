@@ -66,8 +66,10 @@ export class ChatRegistry {
     }
 
     async send(instanceId, query, notify) {
+        const entry = this.panels.get(instanceId);
         const { chat } = await this.ready(instanceId);
         if (chat.snapshot().busy) await chat.pending;
+        if (this.panels.get(instanceId) !== entry) throw new Error("This chat is closed.");
         const before = chat.snapshot().messages.length;
         const pending = chat.start("send", { query });
         pending.then(() => {
@@ -80,8 +82,10 @@ export class ChatRegistry {
     }
 
     async newChat(instanceId) {
+        const entry = this.panels.get(instanceId);
         const { chat } = await this.ready(instanceId);
         if (chat.snapshot().busy) await chat.pending;
+        if (this.panels.get(instanceId) !== entry) throw new Error("This chat is closed.");
         await chat.start("reset", { reconnect: true });
         const state = chat.snapshot();
         return { status: state.status, error: state.error ?? null, messageCount: state.messages.length };
@@ -307,7 +311,7 @@ export class Chat {
             input.query.length > 16_000 || input.query.includes("\0"))) {
             throw new Error("Enter a message of at most 16,000 characters.");
         }
-        if (operation === "send" && this.state.messages.length >= 100) throw new Error("Start a new conversation; this chat reached its limit.");
+        if (operation === "send" && this.state.messages.length + 2 > 100) throw new Error("Start a new conversation; this chat reached its limit.");
         const attachments = operation === "send" ? uploads(input.files) : [];
         this.state.busy = true;
         this.state.operation = operation;

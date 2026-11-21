@@ -175,7 +175,8 @@ The pane retains drafts on failure. Transcripts survive extension/app restarts
 iframe while its backend lives preserves the chat. The limits are 16,000 input
 characters, 100 transcript entries, 1 MB retained transcript, 4 MiB combined CLI
 output for setup and status checks, 16 MiB combined CLI output for live turns,
-and a two-minute operation timeout.
+and a two-minute operation timeout. Sending requires space for both the user
+message and the agent reply; an opening greeting also counts toward the entry limit.
 
 ### Conversation data (JSON)
 
