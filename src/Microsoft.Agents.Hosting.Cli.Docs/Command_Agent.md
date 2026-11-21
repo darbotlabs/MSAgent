@@ -326,7 +326,7 @@ refreshed from the environment, except a file edited locally since its last sync
 next deploy to send.
 
 ```text
-msagent agent pull [--project <directory>] [--agent-id <id> | --agent-name <name>]
+msagent agent pull [--project <directory>] [--agent-id <id> | --agent-name <name>] [--overwrite]
 
 # Standalone workflow
 msagent agent pull [--project <directory>] [--agent-id <id> | --agent-name <name>] \
@@ -340,12 +340,12 @@ msagent agent pull [--project <directory>] [--agent-id <id> | --agent-name <name
 | `--agent-name` | `-an` | String | None | The record to pull, by name. |
 | `--deployment-id` | `-did` | String | The only matching deployment | MCSWorkflow only. Select the deployment whose environment is read; wins over `--deployment-name`. |
 | `--deployment-name` | `-dn` | String | The only matching deployment | MCSWorkflow only. Select the deployment by name. Required to disambiguate when several match. |
-| `--overwrite` | `-ow` | Flag | Off | MCSWorkflow only. Replace local workflow edits not yet seen by the environment. |
+| `--overwrite` | `-ow` | Flag | Off | MCSWorkflow: replace local workflow edits not yet seen by the environment. MCSAgent: delete locally changed knowledge files that the environment deleted or replaced, instead of keeping them or stopping. |
 
 An MCSAgent pull requires an existing workspace connection and reads that connection's environment,
 not the active environment or a deployment. It merges remote changes into local content, and pulls
 declared component collections only when they are connected to the same environment.
-Deployment selectors and `--overwrite` are rejected for MCSAgent.
+Deployment selectors are rejected for MCSAgent.
 Merge conflicts are reported in the result/warnings rather than making the pull fail.
 
 A standalone workflow pull resolves a deployment (the sole matching deployment may be implicit)
@@ -453,6 +453,8 @@ msagent agent deploy --agent-id <id> --package-revision <revision-id> \
   acknowledged with `--overwrite`.
 - Declared component collections are pushed first when connected to the target environment.
   Missing or differently connected collections produce warnings.
+- `--overwrite` doesn't replace cloud changes that would delete or replace knowledge files changed
+  locally; the deploy stops with [17025](ErrorCodes/17025.md) so you can pull first.
 - For an MCSAgent, deployment records are updated even when content or workflow-activation warnings remain.
   With `--publish`, content/activation blockers withhold publication and fail the command after
   recording the deploy; informational notices alone do not prevent publication.

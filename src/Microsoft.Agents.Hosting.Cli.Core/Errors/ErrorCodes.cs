@@ -94,6 +94,7 @@ public static class ErrorCodes
         public const int CopyNotPrepared = 11059;
         public const int CopyIntoProjectBusy = 11067;
         public const int ResourceDeleteIncomplete = 11069;
+        public const int AgentManaged = 11070;
     }
 
     /// <summary>Error identifiers for the Authentication area (prefix 12).</summary>
@@ -268,6 +269,7 @@ public static class ErrorCodes
         public const int MissingConnectionReference = 17032;
         public const int DuplicateComponent = 17033;
         public const int SharedEnvironmentVariablesRequireOverwrite = 17034;
+        public const int DeletedKnowledgeFileEditsCannotBeKept = 17035;
     }
 
     /// <summary>Error identifiers for the Evaluation area (prefix 18).</summary>
