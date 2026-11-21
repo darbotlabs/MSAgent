@@ -295,4 +295,5 @@ configured canvas starts a live conversation. Live acceptance requires explicit
 target/effects approval and a record following `docs/developer/ManualTesting.md`;
 no cross-platform live compatibility is claimed by the offline suite.
 
-This is a repository extension, not a marketplace plugin installation.
+This extension is distributed as part of the `msagent-assistant` plugin and
+requires a GitHub Copilot host with canvas support.
