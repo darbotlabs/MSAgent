@@ -94,7 +94,7 @@ mean a change partially completed or its result is uncertain.
 | [11028](ErrorCodes/11028.md) | Removal of the workspace's connection-reference declaration could not be confirmed. |
 | [11029](ErrorCodes/11029.md) | The workspace does not declare the requested logical reference name. |
 | [11030](ErrorCodes/11030.md) | The reference exists, but a later binding step failed. |
-| [11031](ErrorCodes/11031.md) | Declaration failed and may have left a cloud reference absent from the workspace. |
+| [11031](ErrorCodes/11031.md) | The connection reference could not be declared in the workspace. |
 | [11032](ErrorCodes/11032.md) | The service returned an unsuccessful response to the connection deletion request. |
 | [11033](ErrorCodes/11033.md) | The reference is already gone, but connection deletion failed or remains uncertain. |
 | [11034](ErrorCodes/11034.md) | A new connection survived after both sign-in and automatic cleanup failed. |
@@ -125,6 +125,7 @@ mean a change partially completed or its result is uncertain.
 | [11059](ErrorCodes/11059.md) | Preparing the copy found blockers, so nothing was written or sent. |
 | [11067](ErrorCodes/11067.md) | Another copy into the same project is running. |
 | [11069](ErrorCodes/11069.md) | The agent was deleted, but some of the resources `--all-resources` deletes were not. |
+| [11070](ErrorCodes/11070.md) | The agent belongs to a managed solution, so it cannot be cloned. |
 
 ## Authentication
 
@@ -155,7 +156,7 @@ mean a change partially completed or its result is uncertain.
 
 | Code | Description |
 | --- | --- |
-| [13001](ErrorCodes/13001.md) | An endpoint or inventory identifier failed destination trust validation. |
+| [13001](ErrorCodes/13001.md) | An endpoint or inventory identifier failed destination trust validation for the selected cloud and API ring. |
 | [13002](ErrorCodes/13002.md) | The active cloud changed after this process created its service clients. |
 | [13003](ErrorCodes/13003.md) | The command requires an environment but no active selection is available. |
 | [13004](ErrorCodes/13004.md) | The requested environment is absent from the active account's inventory. |
@@ -229,11 +230,11 @@ mean a change partially completed or its result is uncertain.
 | --- | --- |
 | [15001](ErrorCodes/15001.md) | The package publication target configuration is missing or incomplete. |
 | [15002](ErrorCodes/15002.md) | The configured endpoint cannot be used for a credential-bearing publication request. |
-| [15003](ErrorCodes/15003.md) | The local package selected for publication could not be read. |
+| [15003](ErrorCodes/15003.md) | The local package could not be read before or during upload; correct local file access and report persistent failures with correlation details. An in-flight upload outcome is uncertain. |
 | [15004](ErrorCodes/15004.md) | The package bytes read for publication differ from the recorded build digest. |
 | [15005](ErrorCodes/15005.md) | A publication redirect was not followed to protect delegated credentials. |
-| [15006](ErrorCodes/15006.md) | The upload timed out without confirming whether the package was persisted. |
-| [15007](ErrorCodes/15007.md) | The upload exchange failed without confirming remote package state. |
+| [15006](ErrorCodes/15006.md) | The upload timed out without confirming whether the package was persisted; check connectivity and report persistent failures with correlation details. |
+| [15007](ErrorCodes/15007.md) | The upload exchange failed without confirming remote package state; restore network access and report persistent failures with correlation details. |
 | [15008](ErrorCodes/15008.md) | A durable upload operation exists, but no successful Package Revision was confirmed. |
 | [15009](ErrorCodes/15009.md) | The service response does not satisfy the expected terminal upload operation contract. |
 | [15010](ErrorCodes/15010.md) | The service digest differs from the SHA-256 of the package bytes sent. |
@@ -299,6 +300,7 @@ mean a change partially completed or its result is uncertain.
 | [17032](ErrorCodes/17032.md) | A persistent missing-reference refusal stopped the component push. |
 | [17033](ErrorCodes/17033.md) | A persistent duplicate-component refusal stopped the component push. |
 | [17034](ErrorCodes/17034.md) | The deploy would overwrite shared environment variables the target environment already holds. |
+| [17035](ErrorCodes/17035.md) | The pull stopped because the environment deleted or replaced locally edited knowledge files that it can't keep. |
 
 ## Evaluation
 
