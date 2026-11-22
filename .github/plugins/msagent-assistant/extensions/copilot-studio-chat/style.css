@@ -35,9 +35,8 @@ button { padding: 5px 10px; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible, pre:focus-visible, #debug-output:focus-visible { outline: 2px solid var(--color-focus-outline, #0969da); outline-offset: 2px; }
 form { border-top: 1px solid var(--border-color-default, #d1d9e0); }
-#file-status { margin: 0 0 8px; max-height: 4.5em; overflow-y: auto; overflow-wrap: anywhere; }
 label { display: block; margin-bottom: 6px; }
-textarea { display: block; width: 100%; padding: 8px; resize: vertical; max-height: 200px; }
+textarea { display: block; width: 100%; padding: 8px; resize: none; }
 .message { margin: 16px 0; padding: 12px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 8px; }
 .message-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .message-menu { position: relative; flex-shrink: 0; }
@@ -63,7 +62,7 @@ textarea { display: block; width: 100%; padding: 8px; resize: vertical; max-heig
 .markdown table { border-collapse: collapse; }
 .markdown th, .markdown td { padding: 6px 10px; border: 1px solid var(--border-color-default, #d1d9e0); text-align: left; }
 .markdown a { color: var(--text-color-default, #1f2328); text-decoration: underline; }
-#error, #file-status.file-error { color: var(--true-color-red, #cf222e); white-space: pre-wrap; }
+#error, .file-status.file-error { color: var(--true-color-red, #cf222e); white-space: pre-wrap; }
 #status:not([hidden]) { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-color-muted, #59636e); }
 #status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 #status.ready::before { background: var(--true-color-green, light-dark(#1a7f37, #3fb950)); }
@@ -97,6 +96,10 @@ textarea { display: block; width: 100%; padding: 8px; resize: vertical; max-heig
 #pending-files:empty { margin: 0; }
 #pending-files button { margin-left: 6px; padding: 0 4px; font-size: 12px; }
 .message-files button { font-size: 12px; }
+.message.assistant .message-files { flex-direction: column; align-items: flex-start; gap: 6px; }
+.message-file { display: flex; align-items: baseline; gap: 8px; max-width: 100%; }
+.message-file button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.file-status { min-width: 0; overflow-wrap: anywhere; }
 .typing:not([hidden]) { display: flex; align-items: center; gap: 10px; padding: 8px 0; color: var(--text-color-muted, #59636e); font-size: 12px; }
 .typing-dots { display: flex; gap: 4px; }
 .typing-dots span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: typing-pulse 1.2s ease-in-out infinite; }

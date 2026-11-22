@@ -26,6 +26,11 @@ export class SetupChat {
         return this.chat ? this.chat.pending : this.setupPending;
     }
 
+    markFileSaved(id, savedName) {
+        if (!this.chat) throw new Error("Choose an agent before saving files.");
+        return this.chat.markFileSaved(id, savedName);
+    }
+
     async configure(input) {
         if (this.closed) throw new Error("This canvas is closed.");
         if (this.chat || this.configuring) throw new Error("This canvas already has an agent or is being configured.");

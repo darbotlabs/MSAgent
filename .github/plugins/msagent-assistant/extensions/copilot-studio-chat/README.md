@@ -26,12 +26,13 @@ or run agent actions.
 
 ## Use
 
-- **Send:** Enter sends a message; Shift+Enter adds a line. Replies stream into
-  the conversation with Markdown formatting.
+- **Send:** Enter sends a message; Shift+Enter adds a line. The message box
+  scrolls for longer drafts. Replies stream into the conversation with Markdown formatting.
 - **Files:** use **Attach files** to include files with a message. Files returned
   by the agent are shown as filename buttons. Clicking an available file saves
-  it to your Downloads folder and shows it in your file manager. It never opens
-  the file.
+  it to your Downloads folder and tries to show it in your file manager. It never
+  opens the file. The save result appears next to the button; hover over a new
+  save's result for the full path until the transcript is reloaded.
 - **Inspect:** switch to **Debug** for raw activities and CLI responses, including
   tool events. Use **Find in debug data**, or a message's **View debug** menu.
   **Expand chunks** reveals grouped streaming updates.
@@ -45,6 +46,7 @@ Closing the panel clears its chat history.
 On Windows, file reveal launches Explorer visibly and reports whether that
 launch succeeded. Explorer's shell-broker exit code does not reliably indicate
 whether a file was shown; the canvas cannot confirm the final window selection.
+On Linux, file reveal opens the containing folder without selecting the file.
 
 ## Limits
 
@@ -52,10 +54,12 @@ whether a file was shown; the canvas cannot confirm the final window selection.
 - **Messages:** up to 16,000 characters each. Some emoji and symbols count as more than one character.
 - **Chat history:** up to 100 messages, counting both yours and the agent's, including opening greetings. Saved conversation data is also limited to roughly one million characters, including message metadata. Start a new chat when the history fills up.
 - **Debug history:** keeps up to 1 MB of raw responses, including tool events, separately from the chat transcript. Older debug details are removed first.
-- **Uploads:** attach up to five files to a message, totaling at most 10 MiB.
+- **Uploads:** attach up to five files to a message, totaling at most 10 MiB. Names must be at most 200 characters and valid on Windows; rename invalid files before attaching them.
 - **Saved files:** each returned file can be up to 10 MiB. Existing files are never overwritten; a suffix is added to the name instead. Files go to the Downloads folder of the machine running the extension. If its configured Downloads folder cannot be determined, the extension uses `~/Downloads` and shows a warning. New files have owner-only permissions on Unix where supported; on macOS and Windows the extension attempts to mark them as downloaded and warns if it cannot.
+- **File links:** returned files must be inline base64 data or publicly accessible HTTPS links on the standard port. Private-network links and links requiring sign-in cannot be downloaded by the canvas; ask the agent for an accessible or refreshed file.
+- **File availability:** large or numerous returned files can evict older file references from memory. If a file is no longer available, ask the agent to provide it again.
 - **Browser downloads:** browser-style downloads inside the canvas appear to be a limitation of the Copilot app. This extension saves files through its backend instead.
-- **Restored transcripts:** files cannot be downloaded after a saved transcript has been reloaded, such as after an extension restart. Their filename buttons are disabled. Ask the agent to return the file again.
+- **Restored transcripts:** files cannot be downloaded after a saved transcript has been reloaded, such as after an extension restart. Their filename buttons are disabled. A successful save's filename is remembered, but the full path, warnings, and errors are not. The saved indicator records a past save; it does not check whether the file still exists. Look for the filename in Downloads or ask the agent to return the file again. Save indicators for files saved before this feature cannot be recovered retroactively.
 - **Waiting for a response:** each request has a two-minute timeout. If delivery is uncertain, the canvas prompts you to click **Start new chat**.
 - **Long or complex replies:** may appear as plain text, preserving the full text.
 

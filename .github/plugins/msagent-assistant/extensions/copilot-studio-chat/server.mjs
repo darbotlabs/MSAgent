@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { limits } from "./limits.mjs";
 import { saveAndReveal } from "./save.mjs";
 
@@ -84,7 +85,20 @@ export async function startServer(chat, { saveFile = saveAndReveal } = {}) {
                     const controller = new AbortController();
                     response.once("close", () => controller.abort());
                     void chat.files.download(save[1], controller.signal).then(async file => {
-                        try { return await saveFile(file); }
+                        try {
+                            const saved = await saveFile(file);
+                            const savedName = path.basename(saved.path);
+                            try {
+                                if (!await chat.markFileSaved(save[1], savedName)) {
+                                    throw new Error("The returned file is no longer in the transcript.");
+                                }
+                            }
+                            catch {
+                                saved.warning = [saved.warning, "The file was saved, but its saved status could not be recorded in the transcript."]
+                                    .filter(Boolean).join(" ");
+                            }
+                            return { ...saved, savedName };
+                        }
                         catch { throw new Error("The file could not be saved to your Downloads folder."); }
                     }).then(saved => { if (!response.destroyed) reply(200, saved); },
                         error => { if (!response.destroyed) reply(400, { error: error.message }); });

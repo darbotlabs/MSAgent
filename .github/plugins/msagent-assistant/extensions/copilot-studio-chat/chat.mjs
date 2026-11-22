@@ -21,6 +21,11 @@ function transcriptMessages(messages) {
     }));
 }
 
+function validSavedName(name) {
+    return typeof name === "string" && name.length > 0 && name.length <= limits.fileNameCharacters * 2 &&
+        !/[\\/:<>?"*|\x00-\x1f\x7f]/.test(name) && !/^[. ]+$|[. ]$/.test(name);
+}
+
 export function replyNotification(instanceId, result) {
     const head = `The Copilot Studio agent in chat canvas ${JSON.stringify(instanceId)} finished responding to the message you sent with send_message.`;
     if (result.error) return `${head} The send failed: ${result.error} Tell the user.`;
@@ -173,6 +178,7 @@ export class Chat {
         this.pending = undefined;
         this.persist = undefined;
         this.persisting = undefined;
+        this.closed = false;
         this.capable = false;
         this.identity = undefined;
         this.resolved = undefined;
@@ -184,6 +190,7 @@ export class Chat {
         this.startAttempted = false;
         this.debug = new ConversationData();
         this.files = new FileDownloads();
+        this.savedFileNames = new Map();
         this.state = { status: Status.Unchecked, busy: false, operation: null, account: null, target: this.target,
             messages: [], error: null, saveError: null };
     }
@@ -209,9 +216,45 @@ export class Chat {
             ...(this.requiresReset ? { outcomeUncertain: true } : {}),
             ...(this.conversationIssue && this.state.error ? { diagnostic: this.state.error.slice(0, 2000) } : {}),
             messages: this.state.messages.map(({ streaming, files, ...message }) =>
-                files ? { ...message, files: files.map(file => ({ name: file.name })) } : message),
+                files ? { ...message, files: files.map(file => ({
+                    name: file.name,
+                    ...(validSavedName(file.savedName) ? { savedName: file.savedName } : {}),
+                })) } : message),
             debug: this.debug.saved(),
         };
+    }
+
+    provisionalSaved(operation) {
+        return {
+            ...this.saved(),
+            conversationIssue: operation === "connect"
+                ? "The chat may not have finished starting. Check the agent before starting a new chat."
+                : "We couldn't confirm whether the agent received the last message. Start a new chat to continue.",
+            outcomeUncertain: true,
+        };
+    }
+
+    async markFileSaved(id, savedName) {
+        if (!validSavedName(savedName)) throw new Error("The saved filename is invalid.");
+        if (this.closed) return false;
+        const file = this.state.messages.flatMap(message => message.role === "assistant" ? message.files ?? [] : [])
+            .find(entry => entry.id === id);
+        if (!file) return false;
+        file.savedName = savedName;
+        this.savedFileNames.set(id, savedName);
+        if (this.persist) {
+            const pending = (this.persisting ?? Promise.resolve()).then(() => this.persist(
+                this.state.busy && ["connect", "send"].includes(this.state.operation)
+                    ? this.provisionalSaved(this.state.operation) : this.saved()));
+            this.persisting = pending.then(() => {
+                this.state.saveError = null;
+            }, () => {
+                this.state.saveError = "This chat could not be saved and may be lost if the app closes.";
+                if (this.state.status === Status.Ready) this.state.status = Status.Error;
+            });
+            await pending;
+        }
+        return true;
     }
 
     restore(saved) {
@@ -240,7 +283,14 @@ export class Chat {
         } else if (/[\x00-\x20/\\?#%]/.test(saved.conversationId) || saved.conversationId.length > 1024) {
             error = "The saved conversation could not be read.";
         }
-        if (Array.isArray(saved?.messages) && saved.messages.length <= limits.transcriptEntries) this.state.messages = saved.messages;
+        if (Array.isArray(saved?.messages) && saved.messages.length <= limits.transcriptEntries) {
+            this.state.messages = saved.messages;
+            for (const message of this.state.messages) {
+                for (const file of Array.isArray(message?.files) ? message.files : []) {
+                    if (file && typeof file === "object" && !validSavedName(file.savedName)) delete file.savedName;
+                }
+            }
+        }
         this.debug.restore(saved?.debug);
         for (const message of this.state.messages) {
             if (Number.isSafeInteger(message?.turnId)) this.debug.sequence = Math.max(this.debug.sequence, message.turnId);
@@ -396,6 +446,7 @@ export class Chat {
             this.conversationId = null;
             this.state.messages = [];
             this.files.clear();
+            this.savedFileNames.clear();
             if (input.reconnect === true) {
                 operation = "connect";
                 this.state.operation = operation;
@@ -407,15 +458,11 @@ export class Chat {
             checkCredentials: operation === "check" || operation === "connect" });
         if (!live) return;
         if (this.persist) {
-            await this.persisting;
             try {
-                await this.persist({
-                    ...this.saved(),
-                    conversationIssue: operation === "connect"
-                        ? "The chat may not have finished starting. Check the agent before starting a new chat."
-                        : "We couldn't confirm whether the agent received the last message. Start a new chat to continue.",
-                    outcomeUncertain: true,
-                });
+                const pending = (this.persisting ?? Promise.resolve())
+                    .then(() => this.persist(this.provisionalSaved(operation)));
+                this.persisting = pending.catch(() => {});
+                await pending;
                 this.state.saveError = null;
             } catch {
                 throw new Error("The chat could not be saved, so the agent was not contacted. Check local storage and try again.");
@@ -430,7 +477,11 @@ export class Chat {
             const snapshot = reply.snapshot();
             if (streaming && !snapshot.text && !snapshot.attachments.length) return;
             if (operation === "connect" && !snapshot.text && !snapshot.attachments.length) return;
-            const files = snapshot.attachments.map(file => this.files.add(turnId, file)).filter(Boolean);
+            const files = snapshot.attachments.map(file => this.files.add(turnId, file)).filter(Boolean)
+                .map(file => {
+                    const savedName = this.savedFileNames.get(file.id);
+                    return savedName ? { ...file, savedName } : file;
+                });
             const message = {
                 role: "assistant", turnId, partial: partial || snapshot.partial, streaming,
                 text: snapshot.text || (files.length ? "" : "[No supported user-facing text was returned.]"),
@@ -483,6 +534,7 @@ export class Chat {
     }
 
     async close() {
+        this.closed = true;
         this.cancel();
         await this.pending;
         await this.persisting;

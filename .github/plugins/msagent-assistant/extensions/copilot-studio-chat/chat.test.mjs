@@ -546,8 +546,19 @@ test("the protected gateway saves returned files only through authorized same-or
         assert.equal(saved.length, 0);
         const response = await post();
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { path: "/downloads/answer.txt", revealed: true });
+        assert.deepEqual(await response.json(), {
+            path: "/downloads/answer.txt", revealed: true, savedName: "answer.txt",
+        });
+        assert.deepEqual(chat.saved().messages.at(-1).files, [{ name: "answer.txt", savedName: "answer.txt" }]);
         assert.deepEqual(saved.map(entry => [entry.name, entry.content.toString()]), [["answer.txt", "answer"]]);
+        chat.persist = async () => { throw new Error("private filesystem detail"); };
+        const unrecorded = await post();
+        assert.equal(unrecorded.status, 200);
+        const unrecordedResult = await unrecorded.json();
+        assert.match(unrecordedResult.warning, /saved status could not be recorded/);
+        assert(!JSON.stringify(unrecordedResult).includes("private filesystem detail"));
+        assert.match(chat.state.saveError, /could not be saved/);
+        chat.persist = undefined;
         failure = Object.assign(new Error("EACCES: /secret/path"), { code: "EACCES" });
         const denied = await post();
         assert.equal(denied.status, 400);
@@ -556,6 +567,75 @@ test("the protected gateway saves returned files only through authorized same-or
         await chat.start("reset");
         assert.match((await (await post()).json()).error, /no longer available/);
     } finally { await server.close(); }
+});
+
+test("saving through a configured setup canvas persists long collision-adjusted filenames", async () => {
+    const name = `${"a".repeat(196)}.txt`;
+    const savedName = `${"a".repeat(196)} (1).txt`;
+    const result = { ...outcome, activities: [{ type: "message", attachments: [
+        { name, contentType: "text/plain", contentUrl: "data:text/plain;base64,YW5zd2Vy" },
+    ] }] };
+    const { chat } = fixture(args => args[1] === "ask" && !args.includes("--help") ? json(result) : undefined);
+    await chat.start("send", { query: "Return a file" });
+    let persisted;
+    chat.persist = async data => { persisted = data; };
+    const setup = new SetupChat(async () => {}, async () => chat);
+    await setup.configure({});
+    const file = chat.snapshot().messages.at(-1).files[0];
+    const server = await startServer(setup, { saveFile: async () => ({ path: `/downloads/${savedName}`, revealed: true }) });
+    const url = new URL(server.url);
+    try {
+        const response = await fetch(`${url.origin}/files/${file.id}/save`, {
+            method: "POST", body: "{}", headers: {
+                Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json",
+            },
+        });
+        const saved = await response.json();
+        assert.equal(response.status, 200);
+        assert.equal(saved.savedName, savedName);
+        assert.equal(saved.warning, undefined);
+        assert.deepEqual(persisted.messages.at(-1).files, [{ name, savedName }]);
+        assert(!JSON.stringify(persisted).includes("/downloads/"));
+    } finally { await server.close(); }
+});
+
+test("closing the chat during a file save does not write a new transcript afterward", async () => {
+    const result = { ...outcome, activities: [{ type: "message", attachments: [
+        { name: "answer.txt", contentType: "text/plain", contentUrl: "data:text/plain;base64,YW5zd2Vy" },
+    ] }] };
+    const { chat } = fixture(args => args[1] === "ask" && !args.includes("--help") ? json(result) : undefined);
+    await chat.start("send", { query: "Return a file" });
+    const file = chat.snapshot().messages.at(-1).files[0];
+    let writes = 0, release, entered, marked;
+    chat.persist = async () => { writes++; };
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    const finished = new Promise(resolve => { marked = resolve; });
+    const mark = chat.markFileSaved.bind(chat);
+    chat.markFileSaved = async (...args) => {
+        const recorded = await mark(...args);
+        marked(recorded);
+        return recorded;
+    };
+    const server = await startServer(chat, { async saveFile() {
+        entered();
+        await gate;
+        return { path: "/downloads/answer.txt", revealed: true };
+    } });
+    const url = new URL(server.url);
+    const response = fetch(`${url.origin}/files/${file.id}/save`, {
+        method: "POST", body: "{}", headers: {
+            Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json",
+        },
+    }).catch(() => undefined);
+    try {
+        await started;
+        await server.close();
+        release();
+        assert.equal(await finished, false);
+        assert.equal(writes, 0);
+        await response;
+    } finally { release(); }
 });
 
 function markdownDocument() {
@@ -890,46 +970,53 @@ test("an unreachable service shows reconnect guidance when an action fails", asy
         "The canvas could not reach its local chat service. Reopen this canvas to reconnect.");
 });
 
-test("file save status stays outside the scrolling transcript", async () => {
-    const html = await readFile(new URL("index.html", import.meta.url), "utf8");
-    const status = html.indexOf('id="file-status"');
-    assert(status > html.indexOf("</main>"));
-    assert(status > html.indexOf('<form id="composer">'));
-    assert(status < html.indexOf("</form>"));
-});
+function fileStatus(get, name, matches = () => true) {
+    const entry = descendants(get("messages")).find(node => node.className === "message-file" &&
+        node.children[0].textContent === name && matches(node.children[1]));
+    return entry.children[1];
+}
 
-test("returned file buttons save through the local service and show where the file went", async () => {
+test("returned file buttons save through the local service and show the result under the button", async () => {
     const state = { status: "ready", busy: false, target, error: null, messages: [
         { role: "assistant", turnId: 1, text: "Here", files: [{ id: "a".repeat(32), name: "answer.txt" }] },
     ] };
     const posts = [];
     let revealed = true;
     let warning;
+    let savedPath = "/Users/me/Downloads/answer.txt";
     const { get } = await uiFixture(state, (route, options) => {
         if (route.startsWith("/files/")) {
             posts.push([route, options.method, options.body]);
-            return { ok: true, json: async () => ({ path: "/Users/me/Downloads/answer.txt", revealed, warning }) };
+            return { ok: true, json: async () => ({ path: savedPath, revealed, warning }) };
         }
     });
     const button = descendants(get("messages").children[0]).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    const status = fileStatus(get, "answer.txt");
     assert.equal(button["aria-label"], "Save answer.txt to Downloads");
     assert.equal(button.disabled, false);
+    assert.equal(status.hidden, true);
     await button.events.click();
     assert.deepEqual(posts, [[`/files/${"a".repeat(32)}/save`, "POST", "{}"]]);
-    assert.equal(get("file-status").hidden, false);
-    assert.equal(get("file-status").textContent, "Saved answer.txt to /Users/me/Downloads/answer.txt.");
+    assert.equal(status.hidden, false);
+    assert.equal(status.textContent, "✓ Saved to Downloads");
+    assert.equal(status.title, "/Users/me/Downloads/answer.txt");
+    assert.equal(status.role, "status");
+    savedPath = "C:\\Users\\me\\Downloads\\answer (1).txt";
+    await button.events.click();
+    assert.equal(status.textContent, "✓ Saved to Downloads as answer (1).txt");
     assert.equal(button.disabled, false);
     revealed = false;
     await button.events.click();
-    assert.match(get("file-status").textContent, /Could not confirm it was shown in your file manager/);
+    assert.match(status.textContent, /Could not confirm it was shown in your file manager/);
+    assert.equal(status.role, "alert");
     revealed = true;
     warning = "macOS could not mark the file as downloaded.";
     await button.events.click();
-    assert.match(get("file-status").textContent, /macOS could not mark the file as downloaded/);
-    assert.equal(get("file-status").role, "alert");
+    assert.match(status.textContent, /macOS could not mark the file as downloaded/);
+    assert.equal(status.role, "alert");
 });
 
-test("failed file saves show an error and re-enable the filename button", async () => {
+test("failed file saves show an error under the button that survives re-rendering", async () => {
     const state = { status: "ready", busy: false, target, error: null, messages: [
         { role: "assistant", turnId: 1, text: "Here", files: [{ id: "a".repeat(32), name: "answer.txt" }] },
     ] };
@@ -939,19 +1026,67 @@ test("failed file saves show an error and re-enable the filename button", async 
             ? { ok: false, json: async () => ({ error: "The file could not be saved to your Downloads folder." }) }
             : { ok: true, json: async () => ({ path: "/Downloads/answer.txt", revealed: true }) }
         : undefined);
-    get("file-status").hidden = true;
-    const button = descendants(get("messages").children[0]).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    const find = () => descendants(get("messages").children[0]).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    let button = find();
     await button.events.click();
-    assert.equal(get("file-status").textContent, "The file could not be saved to your Downloads folder.");
-    assert.equal(get("file-status").role, "alert");
+    assert.equal(fileStatus(get, "answer.txt").textContent, "The file could not be saved to your Downloads folder.");
+    assert.equal(fileStatus(get, "answer.txt").role, "alert");
     assert.equal(button.disabled, false);
+    state.messages.push({ role: "user", turnId: 2, text: "Thanks" });
     await refresh();
-    assert.equal(get("file-status").textContent, "The file could not be saved to your Downloads folder.");
-    assert.equal(get("file-status").hidden, false);
+    button = find();
+    assert.equal(fileStatus(get, "answer.txt").textContent, "The file could not be saved to your Downloads folder.");
+    assert.equal(fileStatus(get, "answer.txt").hidden, false);
     failed = false;
     await button.events.click();
-    assert.equal(get("file-status").textContent, "Saved answer.txt to /Downloads/answer.txt.");
-    assert.equal(get("file-status").role, "status");
+    assert.equal(fileStatus(get, "answer.txt").textContent, "✓ Saved to Downloads");
+    assert.equal(fileStatus(get, "answer.txt").role, "status");
+});
+
+test("saving across a message re-render keeps the button disabled and shows the warning on the current row", async () => {
+    const state = { status: "ready", busy: false, target, error: null, messages: [
+        { role: "assistant", turnId: 1, text: "Here", files: [{ id: "a".repeat(32), name: "answer.txt" }] },
+    ] };
+    let resolveSave;
+    const pending = new Promise(resolve => { resolveSave = resolve; });
+    const { get, refresh } = await uiFixture(state, route => route.startsWith("/files/") ? pending : undefined);
+    const find = () => descendants(get("messages")).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    const saving = find().events.click();
+    assert.equal(find().disabled, true);
+    state.messages.push({ role: "user", turnId: 2, text: "Thanks" });
+    await refresh();
+    assert.equal(find().disabled, true);
+    resolveSave({ ok: true, json: async () => ({
+        path: "/Downloads/answer.txt", revealed: true, warning: "The file could not be marked as downloaded.",
+    }) });
+    await saving;
+    assert.equal(find().disabled, false);
+    assert.match(fileStatus(get, "answer.txt").textContent, /could not be marked as downloaded/);
+    assert.equal(fileStatus(get, "answer.txt").role, "alert");
+    assert.equal(fileStatus(get, "answer.txt")["aria-live"], "assertive");
+});
+
+test("multiple returned files keep their save results on the matching rows", async () => {
+    const state = { status: "ready", busy: false, target, error: null, messages: [
+        { role: "assistant", turnId: 1, text: "Here", files: [
+            { id: "a".repeat(32), name: "first.txt" }, { id: "b".repeat(32), name: "second.txt" },
+        ] },
+    ] };
+    const { get, refresh } = await uiFixture(state, route => route.startsWith("/files/")
+        ? { ok: true, json: async () => ({
+            path: route.includes("a".repeat(32)) ? "/Downloads/first.txt" : "/Downloads/second (1).txt",
+            revealed: true,
+        }) }
+        : undefined);
+    const find = name => descendants(get("messages")).find(node => node.tagName === "button" && node.textContent === name);
+    await find("first.txt").events.click();
+    assert.equal(fileStatus(get, "first.txt").textContent, "✓ Saved to Downloads");
+    assert.equal(fileStatus(get, "second.txt").hidden, true);
+    await find("second.txt").events.click();
+    state.messages[0].text = "Here are both files";
+    await refresh();
+    assert.equal(fileStatus(get, "first.txt").textContent, "✓ Saved to Downloads");
+    assert.equal(fileStatus(get, "second.txt").textContent, "✓ Saved to Downloads as second (1).txt");
 });
 
 test("restored returned files have disabled filename buttons while uploaded files remain labels", async () => {
@@ -966,10 +1101,11 @@ test("restored returned files have disabled filename buttons while uploaded file
     assert.equal(returned.disabled, true);
     assert.match(returned.title, /transcript was restored.*provide it again/);
     assert.equal(returned.events.click, undefined);
+    assert.equal(fileStatus(get, "answer.txt").hidden, true);
     assert.deepEqual(calls, ["/state"]);
 });
 
-test("a real saved and restored transcript shows returned files as disabled buttons", async () => {
+test("a real saved and restored transcript remembers saved returned files without persisting the path", async () => {
     const result = { ...outcome, activities: [{ type: "message", attachments: [
         { name: "answer.txt", contentType: "text/plain", contentUrl: "data:text/plain;base64,YW5zd2Vy" },
     ] }] };
@@ -978,18 +1114,78 @@ test("a real saved and restored transcript shows returned files as disabled butt
     await chat.start("send", { query: "Return a file" });
     const liveFile = chat.snapshot().messages.at(-1).files[0];
     assert.match(liveFile.id, /^[a-f0-9]{32}$/);
+    let persisted;
+    chat.persist = async data => { persisted = data; };
+    assert.equal(await chat.markFileSaved(liveFile.id, "answer (1).txt"), true);
     const saved = chat.saved();
-    assert.deepEqual(saved.messages.at(-1).files, [{ name: "answer.txt" }]);
+    assert.deepEqual(saved.messages.at(-1).files, [{ name: "answer.txt", savedName: "answer (1).txt" }]);
+    assert.deepEqual(persisted.messages.at(-1).files, [{ name: "answer.txt", savedName: "answer (1).txt" }]);
+    assert(!JSON.stringify(persisted).includes("/Downloads/"));
+    assert(!JSON.stringify(saved).includes("/Downloads/"));
     const restored = fixture().chat;
     await restored.start("check");
     assert.equal(restored.restore(saved), true);
+    assert.equal(restored.snapshot().messages.at(-1).files[0].savedName, "answer (1).txt");
     const { get, calls } = await uiFixture(restored.snapshot());
     const button = get("messages").children.map(article =>
-        descendants(article).find(node => node.tagName === "button" && node.textContent === "answer.txt")).find(Boolean);
+        descendants(article).find(node => node.tagName === "button" && node.textContent === "answer.txt" &&
+            node.title.includes("Previously saved to Downloads"))).find(Boolean);
     assert.equal(button.disabled, true);
-    assert.match(button.title, /transcript was restored.*provide it again/);
+    assert.match(button.title, /Previously saved to Downloads/);
     assert.equal(button.events.click, undefined);
+    assert.equal(fileStatus(get, "answer.txt", node => !node.hidden).textContent, "✓ Saved to Downloads as answer (1).txt");
     assert.deepEqual(calls, ["/state"]);
+});
+
+test("saved file indicators survive a transcript reload independently", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "started-chats-"));
+    const attachments = ["first.txt", "second.txt", "unsaved.txt"].map((name, index) => ({
+        name, contentType: "text/plain", contentUrl: `data:text/plain;base64,${Buffer.from(String(index)).toString("base64")}`,
+    }));
+    const { chat } = fixture(args => args.some(arg => arg.startsWith("--query="))
+        ? json({ ...outcome, activities: [{ type: "message", attachments }] }) : undefined);
+    let server;
+    try {
+        await chat.verifyOpen();
+        const store = new StartedChats(directory);
+        const { pending } = await attachChat(chat, store, "session-1", "panel-1");
+        await pending;
+        await chat.persisting;
+        await chat.start("send", { query: "Return files" });
+        const files = chat.snapshot().messages.at(-1).files;
+        server = await startServer(chat, { saveFile: async file => ({
+            path: `/downloads/${file.name === "first.txt" ? "first (1).txt" : file.name}`, revealed: true,
+        }) });
+        const url = new URL(server.url);
+        const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+        for (const file of files.slice(0, 2)) {
+            const response = await fetch(`${url.origin}/files/${file.id}/save`, { method: "POST", body: "{}", headers });
+            assert.equal(response.status, 200);
+            assert.equal((await response.json()).warning, undefined);
+        }
+        const saved = await store.load("session-1", "panel-1");
+        assert.deepEqual(saved.messages.at(-1).files, [
+            { name: "first.txt", savedName: "first (1).txt" },
+            { name: "second.txt", savedName: "second.txt" },
+            { name: "unsaved.txt" },
+        ]);
+        assert(!JSON.stringify(saved).includes("/downloads/"));
+        const restored = fixture().chat;
+        await restored.verifyOpen();
+        assert.equal(restored.restore(saved), true);
+        const { get } = await uiFixture(restored.snapshot());
+        const buttons = descendants(get("messages")).filter(node => node.tagName === "button" &&
+            ["first.txt", "second.txt", "unsaved.txt"].includes(node.textContent));
+        assert.equal(buttons.length, 3);
+        assert(buttons.every(button => button.disabled));
+        assert.equal(fileStatus(get, "first.txt").textContent, "✓ Saved to Downloads as first (1).txt");
+        assert.equal(fileStatus(get, "second.txt").textContent, "✓ Saved to Downloads");
+        assert.equal(fileStatus(get, "unsaved.txt").hidden, true);
+    } finally {
+        if (server) await server.close();
+        else await chat.close();
+        await rm(directory, { recursive: true, force: true });
+    }
 });
 
 test("message ellipses jump to the matching raw response or input even for repeated text and pruned response history", async () => {
@@ -2433,6 +2629,49 @@ test("an interrupted turn is saved as uncertain before the agent is contacted", 
             await chat?.persisting;
             await rm(directory, { recursive: true, force: true });
         }
+    }
+});
+
+test("saving a streamed file preserves recovery uncertainty and survives the final reply", async () => {
+    const attachment = { name: "answer.txt", contentType: "text/plain", contentUrl: "data:text/plain;base64,YW5zd2Vy" };
+    const activities = [streamed("Partial", 1), streamed("More", 2), streamed("Done", 3, "final")]
+        .map(activity => ({ ...activity, attachments: [attachment] }));
+    let release, entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    const { chat } = fixture(async (args, { onStdout }) => {
+        if (!args.some(arg => arg.startsWith("--query="))) return;
+        onStdout('{"schemaVersion":"1","activities":[' + JSON.stringify(activities[0]));
+        entered();
+        await gate;
+        onStdout("," + activities.slice(1).map(JSON.stringify).join(",") + '],"status":"completed"}');
+        return json({ ...outcome, activities });
+    });
+    await chat.start("connect");
+    const records = [];
+    chat.persist = async record => { records.push(structuredClone(record)); };
+    const turn = chat.start("send", { query: "Return a file" });
+    try {
+        await started;
+        const file = chat.snapshot().messages.at(-1).files[0];
+        await chat.markFileSaved(file.id, "answer (1).txt");
+        const provisional = records.at(-1);
+        assert.equal(provisional.outcomeUncertain, true);
+        assert.match(provisional.conversationIssue, /confirm whether the agent received/);
+        assert.equal(provisional.messages.at(-1).files[0].savedName, "answer (1).txt");
+        const restored = fixture().chat;
+        await restored.start("check");
+        assert.equal(restored.restore(provisional), false);
+        release();
+        await turn;
+        await chat.persisting;
+        assert.equal(chat.saved().messages.at(-1).files[0].savedName, "answer (1).txt");
+        assert.equal(records.at(-1).messages.at(-1).files[0].savedName, "answer (1).txt");
+        assert.equal(records.at(-1).outcomeUncertain, undefined);
+    } finally {
+        release();
+        await turn;
+        await chat.persisting;
     }
 });
 

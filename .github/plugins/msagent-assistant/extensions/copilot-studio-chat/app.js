@@ -52,26 +52,47 @@ function renderPendingFiles() {
     }));
 }
 
-async function saveFile(file, button) {
-    button.disabled = true;
-    const status = element("file-status");
-    status.hidden = true;
-    let isError = false;
+const savedFiles = new Map();
+const fileControls = new Map();
+
+function showFileStatus(node, result) {
+    node.hidden = !result?.text;
+    if (!result?.text) return;
+    node.className = result.isError ? "file-status file-error" : "file-status";
+    node.setAttribute("role", result.isError ? "alert" : "status");
+    node.setAttribute("aria-live", result.isError ? "assertive" : "polite");
+    node.title = result.title ?? "";
+    node.textContent = result.text;
+}
+
+function updateFileControls(id) {
+    const result = savedFiles.get(id);
+    for (const { button, status } of fileControls.get(id) ?? []) {
+        button.disabled = Boolean(result?.pending);
+        showFileStatus(status, result);
+    }
+}
+
+async function saveFile(file) {
+    if (savedFiles.get(file.id)?.pending) return;
+    savedFiles.set(file.id, { ...savedFiles.get(file.id), pending: true });
+    updateFileControls(file.id);
+    let result;
     try {
         const saved = await api(`/files/${file.id}/save`, {});
-        status.textContent = `Saved ${file.name} to ${saved.path}.` +
-            (saved.revealed ? "" : " Could not confirm it was shown in your file manager.") +
-            (saved.warning ? ` ${saved.warning}` : "");
-        isError = Boolean(saved.warning);
+        const savedName = saved.savedName ?? saved.path.split(/[\\/]/).pop();
+        result = {
+            text: `✓ Saved to Downloads${savedName === file.name ? "" : ` as ${savedName}`}` +
+                (saved.revealed ? "" : ". Could not confirm it was shown in your file manager.") +
+                (saved.warning ? `. ${saved.warning}` : ""),
+            title: saved.path ?? "",
+            isError: Boolean(saved.warning) || !saved.revealed,
+        };
     } catch (error) {
-        status.textContent = error.message;
-        isError = true;
+        result = { text: error.message, isError: true };
     } finally {
-        status.className = isError ? "file-error" : "notice";
-        status.setAttribute("role", isError ? "alert" : "status");
-        status.setAttribute("aria-live", isError ? "assertive" : "polite");
-        status.hidden = false;
-        button.disabled = false;
+        savedFiles.set(file.id, result);
+        updateFileControls(file.id);
     }
 }
 
@@ -394,6 +415,7 @@ async function refresh() {
         const inspecting = state.messages.some(message => messageMenus.get(`${message.turnId}-${message.role}`)?.open);
         if (rendered !== key && !inspecting) {
             messageMenus = new Map();
+            fileControls.clear();
             element("messages").replaceChildren(...state.messages.map(message => {
                 const article = document.createElement("article");
                 article.className = `message ${message.role}`;
@@ -428,17 +450,35 @@ async function refresh() {
                     for (const file of message.files) {
                         const returned = message.role === "assistant";
                         const item = document.createElement(returned ? "button" : "span");
+                        let entry = item;
                         item.textContent = returned ? file.name : `Attached: ${file.name}`;
                         if (returned) {
                             item.type = "button";
-                            item.disabled = !file.id;
-                            item.title = file.id ? "Save to your Downloads folder" :
-                                "This file is unavailable after the transcript was restored. Ask the agent to provide it again.";
-                            item.setAttribute("aria-label", file.id ? `Save ${file.name} to Downloads` :
-                                `${file.name} (unavailable after transcript restoration)`);
-                            if (file.id) item.addEventListener("click", () => saveFile(file, item));
+                            item.disabled = !file.id || Boolean(savedFiles.get(file.id)?.pending);
+                            item.title = file.id ? "Save to your Downloads folder" : file.savedName
+                                ? "Previously saved to Downloads. This file is unavailable after transcript restoration."
+                                : "This file is unavailable after the transcript was restored. Ask the agent to provide it again.";
+                            item.setAttribute("aria-label", file.id ? `Save ${file.name} to Downloads` : file.savedName
+                                ? `${file.name} (previously saved to Downloads)`
+                                : `${file.name} (unavailable after transcript restoration)`);
+                            const status = document.createElement("small");
+                            status.setAttribute("aria-live", "polite");
+                            const saveResult = file.id && savedFiles.get(file.id);
+                            showFileStatus(status, saveResult?.text ? saveResult : file.savedName ? {
+                                text: `✓ Saved to Downloads${file.savedName === file.name ? "" : ` as ${file.savedName}`}`,
+                                isError: false,
+                            } : undefined);
+                            if (file.id) {
+                                const controls = fileControls.get(file.id) ?? [];
+                                controls.push({ button: item, status });
+                                fileControls.set(file.id, controls);
+                                item.addEventListener("click", () => saveFile(file));
+                            }
+                            entry = document.createElement("span");
+                            entry.className = "message-file";
+                            entry.append(item, status);
                         }
-                        files.append(item);
+                        files.append(entry);
                     }
                     article.append(files);
                 }
