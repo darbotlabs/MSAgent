@@ -58,17 +58,9 @@ Closing the panel clears its chat history.
 - **Returned files:** up to 10 MiB each, supplied as inline base64 data or publicly accessible HTTPS links on the standard port. Private-network links and links requiring sign-in are unsupported.
 - **Availability:** retained references have a bounded memory budget, so older files may become unavailable. Reloading a transcript also makes its files unavailable and disables their buttons. If you have not already saved the file, ask the agent to provide an accessible copy again. Files already saved to disk are unaffected.
 - **Remembered saves:** the saved filename survives transcript reloads, but the full path, warnings, and errors do not. The indicator records a past save, not whether the file still exists; look for the shown filename in Downloads. Indicators for saves made before this feature cannot be recovered retroactively.
-
-Browser-style downloads inside the canvas appear to be a limitation of the
-Copilot app, so the backend saves files to the Downloads folder of the machine
-running the extension. If that folder cannot be determined, it uses
-`~/Downloads` and warns. Existing files are never overwritten; a suffix is added
-to the name instead.
-
-New files have owner-only permissions on Unix where supported. On macOS and
-Windows, the extension attempts to mark files as downloaded and warns if it
-cannot. Windows reveal confirms only that Explorer launched, not that the file
-was selected; Linux opens the containing folder without selecting it.
+- **Save location:** browser-style downloads inside the canvas appear to be a limitation of the Copilot app, so the backend saves files to the Downloads folder of the machine running the extension. If that folder cannot be determined, it uses `~/Downloads` and warns. Existing files are never overwritten; a suffix is added to the name instead.
+- **File security:** new files have owner-only permissions on Unix where supported. On macOS and Windows, the extension attempts to mark files as downloaded and warns if it cannot.
+- **Reveal:** macOS selects the file in Finder. Windows confirms only that Explorer launched, not that the file was selected; Linux opens the containing folder without selecting it.
 
 ## Data and privacy
 
