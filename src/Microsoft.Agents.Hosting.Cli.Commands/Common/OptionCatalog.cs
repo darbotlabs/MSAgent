@@ -40,6 +40,7 @@ public static class OptionCatalog
         ["--by-reference"] = "-bref",
         ["--client-id"] = "-clid",
         ["--client-secret"] = "-clsec",
+        ["--client-secret-stdin"] = "-clsin",
         ["--cloud"] = "-ci",
         ["--connection"] = "-con",
         ["--connection-id"] = "-conid",
@@ -121,6 +122,7 @@ public static class OptionCatalog
         ["--set-registration"] = "-str",
         ["--set-site"] = "-sts",
         ["--share-with-org"] = "-swo",
+        ["--site"] = "-sit",
         ["--scope"] = "-s",
         ["--scopes"] = "-scp",
         ["--sku"] = "-sku",
@@ -136,6 +138,7 @@ public static class OptionCatalog
         ["--turns"] = "-trn",
         ["--update-testset"] = "-uts",
         ["--user"] = "-u",
+        ["--user-id"] = "-uid",
         ["--version"] = "-v",
         ["--watch"] = "-w",
     }.ToFrozenDictionary(StringComparer.Ordinal);
