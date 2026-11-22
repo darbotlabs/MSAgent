@@ -208,6 +208,8 @@ public sealed class DeploymentChannelCommandHostTests
     [InlineData("update", "--set-pages", false)]
     [InlineData("update", "--set-pages=SYNTHETIC_INLINE_SECRET", false)]
     [InlineData("update", "--set-pages=SYNTHETIC_INLINE_SECRET", true)]
+    [InlineData("update", "--set-pages:SYNTHETIC_INLINE_SECRET", false)]
+    [InlineData("create", "--set-pages:SYNTHETIC_INLINE_SECRET", true)]
     [InlineData("create", "-stp", false)]
     public void InvalidOption_ReportsNameAndChannelWithoutValues(string verb, string option, bool json)
     {
@@ -217,7 +219,7 @@ public sealed class DeploymentChannelCommandHostTests
                 option, "id=page-1", "accessToken=SYNTHETIC_FIELD_SECRET", .. json ? ["--json"] : Array.Empty<string>()]);
 
         Assert.Equal(ExitCodes.Usage, exitCode);
-        var expected = $"Option '{option.Split('=', 2)[0]}' is misspelled or not valid for 'facebook' channel {verb}."
+        var expected = $"Option '{option.Split(['=', ':'], 2)[0]}' is misspelled or not valid for 'facebook' channel {verb}."
             + " Run `msagent --help` for usage.";
         if (json)
         {

@@ -379,17 +379,25 @@ public sealed class DeploymentOAuthCommandHostTests
     }
 
     [Theory]
-    [InlineData("create", "-clsin", false)]
-    [InlineData("update", "--client-secret-stdin", false)]
-    [InlineData("update", "--client-secret-stdin", true)]
-    [InlineData("create", "--client-secret-stdin=SYNTHETIC_SECRET", false)]
-    public void ClientSecretStdin_WithAValueRefusesWithoutEchoingIt(string verb, string option, bool json)
+    [InlineData("create", "-clsin", "SYNTHETIC_SECRET", false)]
+    [InlineData("update", "--client-secret-stdin", "SYNTHETIC_SECRET", false)]
+    [InlineData("update", "--client-secret-stdin", "SYNTHETIC_SECRET", true)]
+    [InlineData("create", "--client-secret-stdin=SYNTHETIC_SECRET", null, false)]
+    [InlineData("create", "--client-secret-stdin", "-SYNTHETIC_SECRET", false)]
+    [InlineData("update", "-clsin", "--SYNTHETIC_SECRET", true)]
+    [InlineData("update", "--client-secret-stdin=-SYNTHETIC_SECRET", null, false)]
+    [InlineData("create", "--client-secret-stdin:-SYNTHETIC_SECRET", null, true)]
+    [InlineData("create", "--client-secrt", "SYNTHETIC_SECRET", false)]
+    [InlineData("update", "--client-secrt=SYNTHETIC_SECRET", null, false)]
+    [InlineData("update", "--client-secrt:SYNTHETIC_SECRET", null, true)]
+    [InlineData("update", "-clsc", "SYNTHETIC_SECRET", false)]
+    public void UnmatchedInput_RefusesWithAMessageThatEchoesNoInput(string verb, string option, string? value, bool json)
     {
         var operations = new FakeOperations();
         var (exitCode, stdout, stderr) = Run(operations,
             ["deployment", "oauth", verb, "--deployment-id", "dep-1", "--connection", "MyOAuth",
                 .. verb == "create" ? ["--provider-name", "Aadv2"] : Array.Empty<string>(),
-                option, .. option.Contains('=') ? Array.Empty<string>() : ["SYNTHETIC_SECRET"],
+                option, .. value is null ? Array.Empty<string>() : [value],
                 .. json ? ["--json"] : Array.Empty<string>()]);
 
         Assert.Equal(ExitCodes.Usage, exitCode);
@@ -408,25 +416,8 @@ public sealed class DeploymentOAuthCommandHostTests
         }
 
         Assert.DoesNotContain("SYNTHETIC_SECRET", stdout + stderr);
-        Assert.Null(operations.LastCreateDeploymentOAuthRequest);
-        Assert.Null(operations.LastUpdateDeploymentOAuthRequest);
-    }
-
-    [Theory]
-    [InlineData("create", "--client-secrt", "SYNTHETIC_SECRET")]
-    [InlineData("update", "--client-secrt=SYNTHETIC_SECRET", null)]
-    [InlineData("update", "-clsc", "SYNTHETIC_SECRET")]
-    public void MisspelledOption_ReportsItsNameWithoutTheValue(string verb, string option, string? value)
-    {
-        var operations = new FakeOperations();
-        var (exitCode, stdout, stderr) = Run(operations,
-            ["deployment", "oauth", verb, "--deployment-id", "dep-1", "--connection", "MyOAuth",
-                .. verb == "create" ? ["--provider-name", "Aadv2"] : Array.Empty<string>(),
-                option, .. value is null ? Array.Empty<string>() : [value]]);
-
-        Assert.Equal(ExitCodes.Usage, exitCode);
-        Assert.Contains($"Option '{option.Split('=', 2)[0]}' is misspelled or not valid for oauth {verb}. Run `msagent --help` for usage.", stderr);
-        Assert.DoesNotContain("SYNTHETIC_SECRET", stdout + stderr);
+        Assert.DoesNotContain("client-secrt", stdout + stderr);
+        Assert.DoesNotContain("-clsc", stdout + stderr);
         Assert.Null(operations.LastCreateDeploymentOAuthRequest);
         Assert.Null(operations.LastUpdateDeploymentOAuthRequest);
     }

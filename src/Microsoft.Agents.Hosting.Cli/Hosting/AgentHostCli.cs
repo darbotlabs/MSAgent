@@ -400,27 +400,25 @@ public sealed class AgentHostCli
             return string.Join(" ", result.Errors.Select(error => error.Message));
         }
 
-        // Echo option names, never unmatched field values or inline option values.
-        var options = result.UnmatchedTokens
-            .Where(token => token.StartsWith('-'))
-            .Select(token => token.Split('=', 2)[0])
-            .Where(option => option is not "-" and not "--")
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
         var channelOption = command.Options.FirstOrDefault(option => option.Name == "--channel");
-        if (options.Length == 0)
+        if (channelOption is null)
         {
-            return channelOption is null
-                ? "Invalid OAuth command input. Check the options and Key=Value parameters; --client-secret-stdin takes no value."
-                : "Invalid channel command input. Check the options and Key=Value fields.";
+            return "Invalid OAuth command input. Check the options and Key=Value parameters; --client-secret-stdin takes no value.";
         }
 
-        var channelResult = channelOption is null ? null : result.GetResult(channelOption);
+        // Echo option names, never unmatched field values or inline option values.
+        var options = result.UnmatchedTokens.Where(token => token.StartsWith('-')).Select(token => token.Split(['=', ':'], 2)[0]).Where(option => option is not "-" and not "--").Distinct(StringComparer.Ordinal).ToArray();
+        if (options.Length == 0)
+        {
+            return "Invalid channel command input. Check the options and Key=Value fields.";
+        }
+
+        var channelResult = result.GetResult(channelOption);
         var channelName = channelResult?.Tokens.Count == 1
             ? DeploymentChannelCatalog.SupportedChannelNames.FirstOrDefault(name =>
                 name.Equals(channelResult.Tokens[0].Value.Trim(), StringComparison.OrdinalIgnoreCase))
             : null;
-        var target = channelOption is null ? $"oauth {command.Name}" : channelName is null ? $"channel {command.Name}" : $"'{channelName}' channel {command.Name}";
+        var target = channelName is null ? $"channel {command.Name}" : $"'{channelName}' channel {command.Name}";
         return string.Join(" ", options.Select(option =>
             $"Option '{option}' is misspelled or not valid for {target}."));
     }

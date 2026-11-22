@@ -56,10 +56,12 @@ public sealed class AgentDeployServiceTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
     [InlineData("0123456789abcdef")]
     [InlineData("0123456789abcdef0123456789abcdef0123456g")]
     [InlineData("0123456789abcdef0123456789abcdef012345678")]
-    public async Task Deploy_WithAMalformedCommit_IsRefusedBeforeAnyCall(string commitId)
+    public async Task Deploy_WithABlankOrMalformedCommit_IsRefusedBeforeAnyCall(string commitId)
     {
         var deployments = new FakeAmsDeploymentTransport { Deployments = [DeploymentRecord()] };
 

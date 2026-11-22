@@ -100,6 +100,20 @@ public sealed class AgentDeployRoutingTests
         Assert.Equal((Agent, Deployment, "home", Commit), (operations.LastDeployRequest!.AgentId, operations.LastDeployRequest.DeploymentId, operations.LastDeployRequest.EnvironmentId, operations.LastDeployRequest.CommitId));
     }
 
+    [Theory]
+    [InlineData("--commit-id", "")]
+    [InlineData("-cid", "   ")]
+    [InlineData("--commit-id=", null)]
+    public void Deploy_ABlankCommit_ReachesTheAmsRouteAsGivenRatherThanAsOmitted(string option, string? value)
+    {
+        var operations = new FakeOperations();
+
+        var (exitCode, _, _) = Run(operations, ["agent", "deploy", "-aid", Agent, "-did", Deployment, "-eid", "home", option, .. value is null ? Array.Empty<string>() : [value]]);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.Equal(value ?? string.Empty, operations.LastDeployRequest!.CommitId);
+    }
+
     [Fact]
     public void Deploy_WithAmsFeaturesOff_KeepsTodaysRouteAndRefusesTheCommit()
     {
