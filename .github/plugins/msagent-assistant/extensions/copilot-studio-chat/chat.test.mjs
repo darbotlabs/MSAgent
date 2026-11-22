@@ -407,7 +407,7 @@ test("a failed Downloads folder lookup is reported with the saved path", async (
 });
 
 test("saved files are revealed without a shell and never opened", async () => {
-    const file = path.join("/downloads", "a b.txt");
+    const file = "/downloads/a b.txt";
     assert.deepEqual(revealCommand(file, "darwin"), { command: "open", args: ["-R", file] });
     assert.deepEqual(revealCommand(file, "linux"), { command: "xdg-open", args: ["/downloads"] });
     assert.deepEqual(revealCommand("C:\\Users\\me\\Downloads\\a b.txt", "win32"), { command: "explorer.exe",

@@ -41,7 +41,7 @@ export async function writeUnique(directory, name, content) {
 export function revealCommand(file, platform = process.platform) {
     if (platform === "darwin") return { command: "open", args: ["-R", file] };
     if (platform === "win32") return { command: "explorer.exe", args: [`/select,"${file}"`], options: { windowsVerbatimArguments: true } };
-    return { command: "xdg-open", args: [path.dirname(file)] };
+    return { command: "xdg-open", args: [path.posix.dirname(file)] };
 }
 
 function run(execute, command, args, options = {}) {
