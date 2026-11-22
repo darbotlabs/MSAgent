@@ -14,6 +14,8 @@ import { startServer } from "./server.mjs";
 import { attachChat, pruneStarted, StartedChats } from "./started.mjs";
 import { FileDownloads, fileLimit, uploads, withUploadedFiles, publicAddress, downloadPublicFile } from "./files.mjs";
 import { SetupChat } from "./setup.mjs";
+import { limits } from "./limits.mjs";
+import { Status, classifyFailure } from "./state.mjs";
 
 const target = { schemaName: "agent_schema", environmentId: "env-id",
     tenantId: "11111111-1111-1111-1111-111111111111", deploymentName: "development" };
@@ -166,6 +168,67 @@ test("uploads validate filenames, encoding, count and size and remove staged fil
         Array(6).fill({ name: "file", base64: "" }),
         [{ name: "large", base64: Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64") }],
     ]) assert.throws(() => uploads(input));
+});
+
+test("upload cleanup failures warn without replacing the send result or error", async () => {
+    for (const fails of [false, true]) {
+        let directory;
+        let sends = 0;
+        const warnings = [];
+        const failure = new Error("Original send failure");
+        const result = { delivered: true };
+        try {
+            const pending = withUploadedFiles(uploads([{ name: "private.txt", base64: "AQID" }]), async () => {
+                sends++;
+                if (fails) throw failure;
+                return result;
+            }, {
+                async remove(folder, options) {
+                    directory = folder;
+                    assert.deepEqual(options, { recursive: true, force: true, maxRetries: 3 });
+                    throw new Error("Synthetic cleanup failure");
+                },
+                warn: message => warnings.push(message),
+            });
+            if (fails) await assert.rejects(pending, error => error === failure);
+            else assert.equal(await pending, result);
+            assert.equal(sends, 1);
+            assert.equal(warnings.length, 1);
+            assert.match(warnings[0], /could not remove temporary upload files/);
+            assert(!warnings[0].includes("private.txt"));
+        } finally {
+            if (directory) await rm(directory, { recursive: true, force: true });
+        }
+    }
+});
+
+test("send request bounds accommodate maximum uploads and escaped query metadata", async () => {
+    let received;
+    const server = await startServer({
+        start(operation, input) { received = { operation, query: input.query, files: uploads(input.files) }; },
+        async close() {},
+    });
+    const url = new URL(server.url);
+    const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+    const files = [1, 1, 1, 1, limits.fileBytes - 4].map(size => ({
+        name: "\u0800".repeat(limits.fileNameCharacters),
+        size,
+        base64: Buffer.alloc(size).toString("base64"),
+    }));
+    const query = "\u0001".repeat(limits.queryCharacters);
+    try {
+        const body = JSON.stringify({ query, files });
+        assert(Buffer.byteLength(body) <= limits.sendRequestBytes);
+        assert.equal((await fetch(`${url.origin}/send`, { method: "POST", headers, body })).status, 202);
+        assert.equal(received.query, query);
+        assert.equal(received.files.length, 5);
+        assert.equal(received.files.reduce((total, file) => total + file.size, 0), limits.fileBytes);
+        assert.equal((await fetch(`${url.origin}/send`, {
+            method: "POST", headers, body: " ".repeat(limits.sendRequestBytes + 1),
+        })).status, 413);
+    } finally {
+        await server.close();
+    }
 });
 
 test("download destinations reject private networks, credentials and non-HTTPS without network access", async () => {
@@ -338,6 +401,33 @@ test("Markdown handles an unfinished streamed code fence and visibly bounds larg
         assert(root.children[0].textContent.includes("formatting limit"));
         assert.equal(root.children[1].textContent, source);
     }
+});
+
+test("Markdown preserves text beyond its nesting limit", () => {
+    const source = "> ".repeat(limits.markdownNesting + 3) + "Deep content";
+    const root = renderMarkdown(source, markdownDocument());
+    assert.match(root.children[0].textContent, /formatting limit/);
+    assert.equal(root.children[1].textContent, source);
+});
+
+test("Markdown parses nested link labels and punctuation using the bundled parser", () => {
+    const root = renderMarkdown("[a [nested] label](https://example.test/path_(part))", markdownDocument());
+    const link = descendants(root).find(node => node.tagName === "a");
+    assert.equal(link.textContent, "a [nested] label");
+    assert.equal(link.href, "https://example.test/path_(part)");
+});
+
+test("malformed bracket and link inputs complete within the bounded parser process", async () => {
+    const moduleUrl = new URL("markdown.mjs", import.meta.url).href;
+    const script = `
+        import { renderMarkdown } from ${JSON.stringify(moduleUrl)};
+        const document = (${markdownDocument.toString()})();
+        for (const source of ["[".repeat(99999), "![".repeat(49999), "[x](".repeat(24999)]) {
+            const result = renderMarkdown(source, document);
+            if (!result.textContent.includes(source)) throw new Error("Malformed input text was lost.");
+        }
+    `;
+    assert.equal((await runCommand(process.execPath, ["--input-type=module", "-e", script], { timeout: 10_000 })).code, 0);
 });
 
 test("activity reader handles arbitrary boundaries, escaped strings and nested metadata before the result closes", () => {
@@ -518,6 +608,7 @@ async function uiFixture(state, respond = () => undefined) {
         return nodes.get(id);
     };
     const timers = [];
+    let now = 1000;
     const calls = [];
     const windowEvents = {};
     const documentEvents = {};
@@ -536,10 +627,11 @@ async function uiFixture(state, respond = () => undefined) {
         FileReader: class {
             readAsDataURL(file) { this.result = `data:application/octet-stream;base64,${file.base64}`; this.onload(); }
         },
-        setTimeout(callback) { timers.push(callback); }, renderMarkdown,
+        setTimeout(callback) { timers.push(callback); }, Date: { now: () => now }, renderMarkdown, limits, Status,
     });
     await new Promise(setImmediate);
     return { get, calls, document, async refresh() { await timers.shift()(); },
+        advanceTime(milliseconds) { now += milliseconds; },
         focus() { return windowEvents.focus(); }, blur() { return windowEvents.blur(); },
         click(target) { return documentEvents.click({ target }); } };
 }
@@ -1144,7 +1236,7 @@ test("debug search tracks streamed data and coexists with bubble-to-debug naviga
         messages: [{ role: "assistant", turnId: 1, text: "needle", streaming: true }], error: null, debugRevision: 1 };
     const debug = { revision: 1, messages: state.messages, truncated: false,
         responses: [{ turnId: 1, complete: false, payload: { text: "needle" } }] };
-    const { get, document, refresh } = await uiFixture(state, route => route === "/debug"
+    const { get, document, refresh, advanceTime } = await uiFixture(state, route => route === "/debug"
         ? { ok: true, json: async () => debug } : undefined);
     await get("view-debug").events.click();
     const search = get("debug-search");
@@ -1154,7 +1246,10 @@ test("debug search tracks streamed data and coexists with bubble-to-debug naviga
     assert.equal(get("debug-search-count").textContent, "2 of 2");
     state.messages[0].text = "needle needle";
     debug.revision = ++state.debugRevision;
-    await new Promise(resolve => setTimeout(resolve, 550));
+    advanceTime(499);
+    await refresh();
+    assert.equal(get("debug-search-count").textContent, "2 of 2");
+    advanceTime(1);
     await refresh();
     assert.equal(get("debug-search-count").textContent, "2 of 3");
     assert.equal(descendants(get("debug-output")).find(node => node.tagName === "mark").scrolled, undefined);
@@ -1402,7 +1497,7 @@ test("the declared canvas opens without input and setup never invokes the CLI", 
     let cliCalls = 0;
     const requests = [];
     await runInNewContext(`(async () => { ${script} })()`, {
-        ChatRegistry, SetupChat, startServer, validateConfiguredInput, validateTarget,
+        ChatRegistry, SetupChat, startServer, validateConfiguredInput, validateTarget, limits,
         Chat: class { constructor() { throw new Error("Unexpected configured chat."); } },
         StartedChats: class { async load() { return null; } async release() { return false; } },
         resolveExecutable: async () => { cliCalls++; throw new Error("Unexpected CLI invocation."); },
@@ -1463,9 +1558,9 @@ test("a menu canvas is configured in place and resumes without starting another 
     const requests = [];
     const input = { chatId: "selected", agentName: "Example Agent", target };
     class FixtureChat extends Chat {
-        constructor(executable, selected) {
+        constructor(executable, selected, runner, signal) {
             const { chat, calls } = fixture(() => undefined, selected);
-            super(executable, selected, chat.runner);
+            super(executable, selected, chat.runner, signal);
             chats.push({ chat: this, calls });
         }
     }
@@ -1475,7 +1570,7 @@ test("a menu canvas is configured in place and resumes without starting another 
         let onExit;
         const exited = new Promise(resolve => { onExit = resolve; });
         await runInNewContext(`(async () => { ${script} })()`, {
-            ChatRegistry, SetupChat, startServer, validateConfiguredInput, validateTarget, attachChat,
+            ChatRegistry, SetupChat, startServer, validateConfiguredInput, validateTarget, attachChat, limits,
             Chat: FixtureChat,
             StartedChats: class extends StartedChats { constructor() { super(directory); } },
             resolveExecutable: async () => process.execPath,
@@ -1731,6 +1826,74 @@ function fixture(override = () => undefined, selected = target) {
     };
     return { chat: new Chat(process.execPath, selected, runner), calls };
 }
+
+test("failure classification preserves uncertainty and sticky connection errors without mutating inputs", () => {
+    for (const [status, turnAttempted, startAttempted, authRequired, delivery, expectedStatus, reset] of [
+        [Status.Ready, false, false, false, undefined, Status.Error, false],
+        [Status.Ready, false, false, true, undefined, Status.AuthenticationRequired, false],
+        [Status.Changed, false, false, false, undefined, Status.Changed, false],
+        [Status.Uncertain, false, false, false, undefined, Status.Uncertain, false],
+        [Status.AuthenticationRequired, false, false, false, undefined, Status.AuthenticationRequired, false],
+        [Status.Ready, true, false, true, "not-attempted", Status.AuthenticationRequired, false],
+        [Status.Ready, true, false, false, "not-attempted", Status.Error, false],
+        [Status.Ready, true, false, false, undefined, Status.Uncertain, true],
+        [Status.Ready, true, false, true, "attempted", Status.Uncertain, true],
+        [Status.Ready, true, true, true, "not-attempted", Status.Uncertain, true],
+    ]) {
+        const context = Object.freeze({ status, turnAttempted, startAttempted, requiresReset: false, conversationIssue: null });
+        const error = Object.assign(new Error("Failure"), { authRequired, data: { queryDelivery: delivery } });
+        const result = classifyFailure(error, context);
+        assert.equal(result.status, expectedStatus);
+        assert.equal(result.requiresReset, reset);
+        assert.equal(error.message, "Failure");
+        if (reset) {
+            assert.match(result.error, /Remote effects may have occurred/);
+            assert.match(result.conversationIssue, startAttempted ? /chat couldn't start/ : /Start a new chat/);
+        } else {
+            assert.equal(result.error, "Failure");
+            assert.equal(result.conversationIssue, null);
+        }
+    }
+});
+
+test("capability checks require complete option names rather than prefixes", async () => {
+    for (const option of ["--query", "--file", "--tenant", "--json", "--non-interactive"]) {
+        for (const suffix of ["-extra", "_extra"]) {
+            const { chat, calls } = fixture(args => args.includes("--help")
+                ? { code: 0, output: help.replace(option, option + suffix) } : undefined);
+            await assert.rejects(chat.verifyOpen(), /lacks required canvas capabilities/);
+            assert.equal(calls.length, 1);
+        }
+    }
+    const { chat } = fixture(args => args.includes("--help")
+        ? { code: 0, output: help.split(" ").map(option => `${option}=<value>`).join(", ") } : undefined);
+    await chat.verifyOpen();
+    assert.equal(chat.state.status, Status.Ready);
+});
+
+test("executable selection uses the user environment and rejects old model-facing overrides", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "canvas-executable-"));
+    try {
+        await writeFile(path.join(directory, process.platform === "win32" ? "msagent.cmd" : "msagent"),
+            "invalid fallback", { mode: 0o700 });
+        assert.equal(await resolveExecutable(undefined, {
+            MSAGENT_CANVAS_EXECUTABLE: process.execPath, PATH: directory,
+        }), process.execPath);
+        for (const configured of ["", "./relative", process.execPath + "\0"]) {
+            await assert.rejects(resolveExecutable(undefined, {
+                MSAGENT_CANVAS_EXECUTABLE: configured, PATH: directory,
+            }), /MSAGENT_CANVAS_EXECUTABLE must be an absolute path/);
+        }
+        await assert.rejects(resolveExecutable(undefined, {
+            MSAGENT_CANVAS_EXECUTABLE: path.join(directory, "missing.exe"), PATH: directory,
+        }), /msagent was not found/);
+        assert.throws(() => validateConfiguredInput({
+            chatId: "old", target, executablePath: process.execPath,
+        }), /Set MSAGENT_CANVAS_EXECUTABLE.*reopen/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
 
 test("panels with the same chat ID keep their conversations independent", async () => {
     const fixtures = [];
@@ -2045,7 +2208,9 @@ test("registry passes the open context to chat creation", async () => {
     let received;
     const registry = new ChatRegistry(async (input, context) => { received = context; return { chat, server: { close: async () => {} } }; });
     await registry.open("one", { chatId: "context", target }, { sessionId: "session-1" });
-    assert.deepEqual(received, { sessionId: "session-1", instanceId: "one" });
+    assert.equal(received.sessionId, "session-1");
+    assert.equal(received.instanceId, "one");
+    assert(received.signal instanceof AbortSignal);
     await registry.closeAll();
 });
 
@@ -2247,6 +2412,117 @@ test("cancellation and close abort only the owned invocation and block concurren
     assert.equal(chat.state.status, "uncertain");
 });
 
+async function startupFixture(blockedCommand, honorsAbort = true) {
+    const entered = Promise.withResolvers();
+    const paused = Promise.withResolvers();
+    const exited = Promise.withResolvers();
+    const calls = [];
+    const handlers = {};
+    const selected = { project: process.cwd(), agentId: "local-agent", deploymentId: "deployment" };
+    const association = json({
+        success: true,
+        agents: [{ agentId: selected.agentId, agentType: "MCSAgent", mcsSchemaName: target.schemaName }],
+        deployments: [{ agentId: selected.agentId, deploymentId: selected.deploymentId, agentType: "MCSAgent",
+            environmentId: target.environmentId, tenantId: target.tenantId, deploymentName: target.deploymentName }],
+    });
+    const responses = { help: { code: 0, output: help }, target: association, auth: json(account),
+        credentials: json({ success: true }), connect: json(outcome) };
+    class FixtureChat extends Chat {
+        constructor(executable, destination, runner, signal) {
+            super(executable, destination, async (file, args, options) => {
+                const command = args.includes("--help") ? "help" : args[0] === "agent" ? "target"
+                    : args[0] === "auth" ? "auth" : args[0] === "env" ? "credentials" : "connect";
+                calls.push(command);
+                if (command !== blockedCommand) return responses[command];
+                if (honorsAbort) options.signal.addEventListener("abort",
+                    () => paused.reject(options.signal.reason), { once: true });
+                entered.resolve(options.signal);
+                return paused.promise;
+            }, signal);
+        }
+    }
+    let declaration;
+    const script = fixtureScript(await readFile(new URL("extension.mjs", import.meta.url), "utf8"));
+    await runInNewContext(`(async () => { ${script} })()`, {
+        ChatRegistry, SetupChat, startServer, validateConfiguredInput, validateTarget, attachChat, limits,
+        Chat: FixtureChat,
+        StartedChats: class {
+            async load() { return null; }
+            async claim() { return true; }
+            async release() { return true; }
+            async save() {}
+        },
+        resolveExecutable: async () => process.execPath,
+        pruneStarted: async () => [],
+        createCanvas: options => options,
+        CanvasError: class extends Error { constructor(code, message) { super(message); } },
+        joinSession: async options => {
+            declaration = options.canvases[0];
+            return { sessionId: "startup-session", async send() {}, log() {} };
+        },
+        process: { once: (signal, callback) => { handlers[signal] = callback; }, exit: exited.resolve },
+    });
+    return {
+        declaration, selected, calls, entered: entered.promise,
+        release: () => paused.resolve(responses[blockedCommand]),
+        shutdown() { handlers.SIGTERM(); return exited.promise.then(code => assert.equal(code, 0)); },
+    };
+}
+
+for (const mode of ["direct", "menu"]) {
+    for (const closeAll of [false, true]) {
+        for (const stage of ["help", "target", "auth", "credentials"]) {
+            test(`${mode} startup ${stage} is cancelled by ${closeAll ? "shutdown" : "panel close"}`, async () => {
+                const provider = await startupFixture(stage);
+                const context = { instanceId: "startup-panel", sessionId: "startup-session" };
+                const input = { chatId: "startup", target: provider.selected };
+                if (mode === "menu") await provider.declaration.open(context);
+                const starting = mode === "menu"
+                    ? provider.declaration.actions.find(action => action.name === "configure").handler({ ...context, input })
+                    : provider.declaration.open({ ...context, input });
+                const rejected = assert.rejects(starting, /closed during/);
+                let closing;
+                try {
+                    const signal = await provider.entered;
+                    closing = closeAll ? provider.shutdown() : provider.declaration.onClose(context);
+                    assert.equal(signal.aborted, true);
+                    await Promise.all([closing, rejected]);
+                    assert.deepEqual(provider.calls, ["help", "target", "auth", "credentials"].slice(0,
+                        ["help", "target", "auth", "credentials"].indexOf(stage) + 1));
+                } finally {
+                    provider.release();
+                    await Promise.allSettled([closing, rejected]);
+                    await provider.declaration.onClose(context);
+                }
+            });
+        }
+    }
+}
+
+test("a late startup check result cannot connect after the panel closes", async () => {
+    const provider = await startupFixture("credentials", false);
+    const context = { instanceId: "late-panel", sessionId: "startup-session" };
+    const starting = provider.declaration.open({ ...context, input: { chatId: "late", target: provider.selected } });
+    const rejected = assert.rejects(starting, /closed during/);
+    const signal = await provider.entered;
+    const closing = provider.declaration.onClose(context);
+    try {
+        assert.equal(signal.aborted, true);
+    } finally {
+        provider.release();
+        await Promise.all([closing, rejected]);
+    }
+    assert(!provider.calls.includes("connect"));
+});
+
+test("an explicit command cancellation signal is preserved", async () => {
+    const { chat, calls } = fixture();
+    const controller = new AbortController();
+    controller.abort(new Error("Caller cancelled"));
+    await assert.rejects(chat.command(["test", "ask", "--help"], { signal: controller.signal }), /Caller cancelled/);
+    assert.equal(calls.length, 0);
+});
+
 test("registered target uses deployment destination and detects association changes", async () => {
     const selected = { project: process.cwd(), agentId: "local-agent", deploymentId: "deployment" };
     let destination = target.environmentId;
@@ -2345,7 +2621,7 @@ test("process runner bounds output, propagates exit codes and cancels without a 
     await assert.rejects(resolveExecutable(undefined, { PATH: "." }), /not found/);
 });
 
-test("Windows discovery resolves only the standard .NET 10 launcher to its exact native apphost", { skip: process.platform !== "win32" }, async () => {
+test("Windows discovery resolves only the standard .NET launcher to its exact native apphost", { skip: process.platform !== "win32" }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), "msagent path & literal-"));
     const directory = path.join(root, "isolated installation with a deliberately long path", "tool");
     try {
@@ -2368,20 +2644,47 @@ test("Windows discovery resolves only the standard .NET 10 launcher to its exact
             standard + "echo unexpected\r\n",
             standard.replace("%*", "extra %*"),
             standard.replace("%~dp0.store", "%~dp0..\\other"),
-            standard.replace("net10.0", "net9.0"),
+            standard.replace("net10.0", "netnext"),
+            standard.replace("net10.0", "net10.0-extra"),
             standard.replace(/0.2.168-beta-gfixture(?=\\tools)/, "0.2.999"),
             standard.replaceAll("0.2.168-beta-gfixture", ".."),
             "x".repeat(8193),
         ]) {
             await writeFile(launcher, invalid);
-            await assert.rejects(resolveExecutable(undefined, { PATH: [directory, path.dirname(process.execPath)].join(path.delimiter) }), /standard .NET 10/);
+            await assert.rejects(resolveExecutable(undefined, { PATH: [directory, path.dirname(process.execPath)].join(path.delimiter) }), /standard .NET/);
         }
         await writeFile(launcher, standard);
         await rm(native);
         await assert.rejects(resolveExecutable(undefined, { PATH: directory }), /launcher target/);
-        await assert.rejects(resolveExecutable(path.join(directory, "other.bat")), /native .exe|standard .NET 10/);
+        await assert.rejects(resolveExecutable(path.join(directory, "other.bat")), /native .exe|standard .NET/);
     } finally {
         await rm(root, { recursive: true, force: true });
+    }
+});
+
+test("Windows launcher validation accepts numeric framework versions on every test platform", async () => {
+    let source;
+    const context = {
+        process: { platform: "win32" }, path: path.win32, Buffer, limits, constants: { X_OK: 1 },
+        async access() {},
+        async stat() { return { isFile: () => true }; },
+        async open() {
+            return {
+                async read(buffer, offset, length, position) {
+                    return { bytesRead: Buffer.from(source).copy(buffer, offset, position, position + length) };
+                },
+                async close() {},
+            };
+        },
+    };
+    runInNewContext(fixtureScript(await readFile(new URL("client.mjs", import.meta.url), "utf8"))
+        .replace(/^export /gm, ""), context);
+    for (const framework of ["net9.0", "net10.0", "net11.2", "netnext", "net10.0-extra"]) {
+        const relative = `.store\\microsoft.agents.hosting.cli\\0.2.1\\microsoft.agents.hosting.cli.win-x64\\0.2.1\\tools\\${framework}\\win-x64\\Microsoft.Agents.Hosting.Cli.exe`;
+        source = `@echo off\r\n"%~dp0${relative}" %*\r\n`;
+        const result = context.resolveExecutable("C:\\tools\\msagent.cmd", {});
+        if (/^net\d+\.\d+$/.test(framework)) assert.equal(await result, path.win32.join("C:\\tools", relative));
+        else await assert.rejects(result, /standard .NET launcher/);
     }
 });
 

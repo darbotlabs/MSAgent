@@ -1,8 +1,12 @@
+import { Status } from "./state.mjs";
+
 export class SetupChat {
-    constructor(requestSetup, createChat) {
+    constructor(requestSetup, createChat, signal) {
         this.requestSetup = requestSetup;
         this.createChat = createChat;
-        this.state = { status: "setup-required", setupRequired: true, setupRequested: false,
+        this.controller = new AbortController();
+        this.signal = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal;
+        this.state = { status: Status.SetupRequired, setupRequired: true, setupRequested: false,
             busy: false, operation: null, target: {}, messages: [], connected: false, error: null };
     }
 
@@ -32,7 +36,7 @@ export class SetupChat {
             this.state.operation = "configure";
             this.state.error = null;
             try {
-                const chat = await this.createChat(input, () => this.closed);
+                const chat = await this.createChat(input, () => this.closed || this.signal.aborted, this.signal);
                 if (this.closed) {
                     await chat.close();
                     throw new Error("This canvas was closed during setup.");
@@ -80,6 +84,7 @@ export class SetupChat {
 
     async close() {
         this.closed = true;
+        this.controller.abort(new Error("This canvas was closed during setup."));
         await this.setupPending;
         await this.configuring?.catch(() => {});
         await this.chat?.close();

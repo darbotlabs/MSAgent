@@ -5,9 +5,9 @@ import { get } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { limits } from "./limits.mjs";
 
-export const fileLimit = 10 * 1024 * 1024;
-const referenceLimit = Math.ceil(fileLimit / 3) * 4 + 4096;
+export const fileLimit = limits.fileBytes;
 const blocked = new BlockList();
 for (const [address, prefix] of [
     ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
@@ -80,17 +80,17 @@ export async function downloadPublicFile(address, signal, redirects = 0) {
 }
 
 function validName(name) {
-    return typeof name === "string" && name.length > 0 && name.length <= 200 &&
+    return typeof name === "string" && name.length > 0 && name.length <= limits.fileNameCharacters &&
         !/[\\/:<>?"*|\x00-\x1f\x7f]/.test(name) && !/^[. ]+$|[. ]$/.test(name) &&
         !/^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?: *\.|$)/i.test(name);
 }
 
 export function uploads(input = []) {
-    if (!Array.isArray(input) || input.length > 5) throw new Error("Attach at most five files.");
+    if (!Array.isArray(input) || input.length > limits.uploadFiles) throw new Error("Attach at most five files.");
     let total = 0;
     return input.map(file => {
         if (!file || !validName(file.name) || typeof file.base64 !== "string" ||
-            file.base64.length > Math.ceil(fileLimit / 3) * 4 || file.base64.length % 4 !== 0 ||
+            file.base64.length > limits.base64FileCharacters || file.base64.length % 4 !== 0 ||
             !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64)) {
             throw new Error("An attachment has an invalid filename or file data.");
         }
@@ -101,7 +101,7 @@ export function uploads(input = []) {
     });
 }
 
-export async function withUploadedFiles(files, action) {
+export async function withUploadedFiles(files, action, { remove = rm, warn = message => process.emitWarning(message) } = {}) {
     if (!files.length) return action([]);
     const directory = await mkdtemp(path.join(tmpdir(), "msagent-canvas-"));
     try {
@@ -115,7 +115,11 @@ export async function withUploadedFiles(files, action) {
         }
         return await action(paths);
     } finally {
-        await rm(directory, { recursive: true });
+        try {
+            await remove(directory, { recursive: true, force: true, maxRetries: 3 });
+        } catch {
+            warn("Copilot Studio chat could not remove temporary upload files. They may remain in the system temporary directory.");
+        }
     }
 }
 
@@ -139,8 +143,8 @@ export class FileDownloads {
         if (existing) return { id: existing, name: this.entries.get(existing).name };
         const name = validName(attachment.name) ? attachment.name : "download";
         const bytes = Buffer.byteLength(url);
-        if (bytes > referenceLimit) throw new Error("Returned file data exceeds the 10 MiB limit.");
-        while (this.entries.size && this.bytes + bytes > referenceLimit) {
+        if (bytes > limits.downloadReferenceBytes) throw new Error("Returned file data exceeds the 10 MiB limit.");
+        while (this.entries.size && this.bytes + bytes > limits.downloadReferenceBytes) {
             const [id, oldest] = this.entries.entries().next().value;
             this.bytes -= Buffer.byteLength(oldest.url);
             this.entries.delete(id);

@@ -1,7 +1,10 @@
 import { renderMarkdown } from "./markdown.mjs";
+import { limits } from "./limits.mjs";
+import { Status } from "./state.mjs";
 
 const capability = location.hash.slice(1);
 const element = id => document.getElementById(id);
+element("query").maxLength = limits.queryCharacters;
 let state;
 let rendered = "";
 let draftSent;
@@ -312,7 +315,7 @@ function controls() {
     element("connection").hidden = setup;
     element("view-controls").hidden = setup;
     const conversationBlocked = Boolean(state?.conversationIssue);
-    const canConnect = ["ready", "authentication-required"].includes(state?.status);
+    const canConnect = [Status.Ready, Status.AuthenticationRequired].includes(state?.status);
     element("files").disabled = preparingFiles || conversationBlocked;
     element("query").disabled = conversationBlocked;
     element("query").placeholder = conversationBlocked ? "Start a new chat to send a message." : "Ask your agent…";
@@ -370,15 +373,15 @@ async function refresh() {
             ["conn-environment", target.environmentId],
             ["conn-tenant", target.tenantId],
         ]) element(id).textContent = value || "—";
-        const statusText = !state.busy && state.status === "authentication-required" ? "Signed out"
-            : !state.busy && !state.conversationIssue && !state.saveError && state.status === "error" ? "Connection problem"
+        const statusText = !state.busy && state.status === Status.AuthenticationRequired ? "Signed out"
+            : !state.busy && !state.conversationIssue && !state.saveError && state.status === Status.Error ? "Connection problem"
             : "";
         element("status").textContent = statusText;
         element("status").hidden = !statusText;
         element("status").className = state.status;
-        element("status").title = state.status === "authentication-required"
+        element("status").title = state.status === Status.AuthenticationRequired
             ? "Run `msagent auth create`, then return here."
-            : state.status === "error" ? state.error ?? "Check your CLI connection and selected agent." : "";
+            : state.status === Status.Error ? state.error ?? "Check your CLI connection and selected agent." : "";
         const key = JSON.stringify([agentName(), state.messages]);
         const inspecting = state.messages.some(message => messageMenus.get(`${message.turnId}-${message.role}`)?.open);
         if (rendered !== key && !inspecting) {
@@ -477,15 +480,15 @@ function closeOverlays(target) {
 document.addEventListener("click", event => closeOverlays(event.target));
 window.addEventListener("blur", () => closeOverlays());
 const refreshConnectionOnFocus = () => {
-    if (state && !state.setupRequired && !stopped && !acting && !state.busy && state.status !== "ready") return act("check");
+    if (state && !state.setupRequired && !stopped && !acting && !state.busy && state.status !== Status.Ready) return act("check");
 };
 window.addEventListener("focus", refreshConnectionOnFocus);
 element("query").addEventListener("input", () => { draftVersion++; controls(); });
 element("files").addEventListener("change", async () => {
     const selected = Array.from(element("files").files);
     element("files").value = "";
-    if (pendingFiles.length + selected.length > 5 ||
-        [...pendingFiles, ...selected].reduce((bytes, file) => bytes + file.size, 0) > 10 * 1024 * 1024) {
+    if (pendingFiles.length + selected.length > limits.uploadFiles ||
+        [...pendingFiles, ...selected].reduce((bytes, file) => bytes + file.size, 0) > limits.fileBytes) {
         showError("Attach at most five files, at most 10 MiB total.");
         return;
     }

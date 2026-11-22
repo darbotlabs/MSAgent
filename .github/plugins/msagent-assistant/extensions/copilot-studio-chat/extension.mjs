@@ -4,9 +4,12 @@ import { resolveExecutable, validateConfiguredInput, validateTarget } from "./cl
 import { startServer } from "./server.mjs";
 import { attachChat, pruneStarted, StartedChats } from "./started.mjs";
 import { SetupChat } from "./setup.mjs";
+import { limits } from "./limits.mjs";
 
 const started = new StartedChats();
 const registry = new ChatRegistry(async (input, context) => {
+    const signal = context.signal;
+    signal.throwIfAborted();
     let configuredFromSetup = false;
     if (!input.target) {
         const saved = await started.load(context.sessionId, context.instanceId);
@@ -23,33 +26,42 @@ const registry = new ChatRegistry(async (input, context) => {
                 "Once selected, invoke this canvas instance's configure action with the complete target and the agent's known friendly name in agentName. Do not open a new canvas.",
             source: "system",
             mode: "enqueue",
-        }), async (selected, isClosed) => {
+        }), async (selected, isClosed, setupSignal) => {
             validateConfiguredInput(selected);
-            const executable = await resolveExecutable(selected.executablePath);
-            const configured = new Chat(executable, selected.target);
-            await configured.verifyOpen();
-            if (isClosed()) throw new Error("This canvas was closed during setup.");
-            if (selected.agentName) configured.state.agentName = selected.agentName;
+            const executable = await resolveExecutable();
+            setupSignal.throwIfAborted();
+            const configured = new Chat(executable, selected.target, undefined, setupSignal);
             try {
+                await configured.verifyOpen();
+                setupSignal.throwIfAborted();
+                if (selected.agentName) configured.state.agentName = selected.agentName;
                 await attachChat(configured, started, context.sessionId, context.instanceId, selected, isClosed);
                 return configured;
             } catch (error) {
                 await configured.close();
                 throw error;
             }
-        });
+        }, signal);
         return { chat, server: await startServer(chat) };
     }
-    const executable = await resolveExecutable(input.executablePath);
-    const chat = new Chat(executable, input.target);
-    await chat.verifyOpen();
-    const server = await startServer(chat);
+    validateConfiguredInput(input);
+    const executable = await resolveExecutable();
+    signal.throwIfAborted();
+    const chat = new Chat(executable, input.target, undefined, signal);
+    let server;
     try {
+        await chat.verifyOpen();
+        signal.throwIfAborted();
+        server = await startServer(chat);
+        signal.throwIfAborted();
         if (input.agentName) chat.state.agentName = input.agentName;
-        await attachChat(chat, started, context.sessionId, context.instanceId, configuredFromSetup ? input : undefined);
+        await attachChat(chat, started, context.sessionId, context.instanceId, configuredFromSetup ? input : undefined,
+            () => signal.aborted);
         return { chat, server };
     } catch (error) {
-        await server.close();
+        if (server) await server.close();
+        else await chat.close();
+        signal.throwIfAborted();
         throw error;
     }
 }, (instanceId, context) => started.release(context.sessionId, instanceId));
@@ -61,7 +73,6 @@ const configuredInputSchema = {
         chatId: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,128}$" },
         agentName: { type: "string", minLength: 1, maxLength: 256, pattern: "\\S",
             description: "Selected agent's friendly display name, when known, for chat message labels." },
-        executablePath: text,
         target: {
             oneOf: [
                 {
@@ -106,7 +117,7 @@ const session = await joinSession({
                 "Only send what the user asked you to; each message is a live call to the agent.",
             inputSchema: {
                 type: "object", additionalProperties: false, required: ["text"],
-                properties: { text: { type: "string", minLength: 1, maxLength: 16_000, pattern: "\\S" } },
+                properties: { text: { type: "string", minLength: 1, maxLength: limits.queryCharacters, pattern: "\\S" } },
             },
             handler: async ctx => {
                 const instanceId = ctx.instanceId;

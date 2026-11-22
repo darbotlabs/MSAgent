@@ -1,5 +1,7 @@
+import { limits } from "./limits.mjs";
+
 export class ConversationData {
-    constructor(limit = 1_000_000) {
+    constructor(limit = limits.debugBytes) {
         this.limit = limit;
         this.revision = 0;
         this.sequence = 0;

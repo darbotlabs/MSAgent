@@ -102,9 +102,14 @@ installation-isolated data routing, generated packages and existing lifecycle
 safeguards. Existing repository CI runs these checks; plugin versioning and
 resources do not depend on the .NET package build.
 
-The chat canvas targets the current .NET 10 Windows `msagent.cmd` layout,
+The chat canvas validates the standard Windows `msagent.cmd` layout with a
+numeric `net<major>.<minor>` framework directory,
 resolving its standard launcher to the exact native tool-store apphost without
-a shell. Native executable overrides remain available for local builds.
+a shell. Discovery uses the app's PATH; set `MSAGENT_CANVAS_EXECUTABLE` in the
+app environment to an absolute native executable or standard launcher path for
+a local build. Invalid overrides fail rather than selecting another installation.
+Canvas inputs formerly using `executablePath` must move that setting to the app
+environment and reopen with the current input schema.
 macOS/Linux retain PATH-entry and symlink invocation. Windows installed-package
 acceptance additionally checks canvas discovery and command capabilities in an
 isolated installation; canvas offline tests run on Windows, Linux and macOS.

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { limits } from "./limits.mjs";
 
 export async function startServer(chat) {
     const capability = randomBytes(32).toString("hex");
@@ -8,6 +9,9 @@ export async function startServer(chat) {
         ["/", "index.html", "text/html; charset=utf-8"],
         ["/app.js", "app.js", "text/javascript; charset=utf-8"],
         ["/markdown.mjs", "markdown.mjs", "text/javascript; charset=utf-8"],
+        ["/markdown-it.bundle.mjs", "markdown-it.bundle.mjs", "text/javascript; charset=utf-8"],
+        ["/limits.mjs", "limits.mjs", "text/javascript; charset=utf-8"],
+        ["/state.mjs", "state.mjs", "text/javascript; charset=utf-8"],
         ["/style.css", "style.css", "text/css; charset=utf-8"],
     ].map(async ([route, file, type]) => [route, { body: await readFile(new URL(file, import.meta.url)), type }])));
     let origin;
@@ -61,7 +65,7 @@ export async function startServer(chat) {
         }
         let body = "";
         let bytes = 0;
-        const limit = route === "/send" ? 15_000_000 : 100_000;
+        const limit = route === "/send" ? limits.sendRequestBytes : limits.controlRequestBytes;
         request.setEncoding("utf8");
         request.on("data", chunk => {
             bytes += Buffer.byteLength(chunk);

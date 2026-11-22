@@ -2,8 +2,14 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, open, stat } from "node:fs/promises";
 import path from "node:path";
+import { limits } from "./limits.mjs";
 
 export async function resolveExecutable(configured, environment = process.env) {
+    configured ??= environment.MSAGENT_CANVAS_EXECUTABLE;
+    if (configured !== undefined && (typeof configured !== "string" || !configured ||
+        configured.length > 4096 || !path.isAbsolute(configured) || /[\x00-\x1f]/.test(configured))) {
+        throw new Error("MSAGENT_CANVAS_EXECUTABLE must be an absolute path to the CLI executable.");
+    }
     const windows = process.platform === "win32";
     const name = windows ? "msagent.cmd" : "msagent";
     const candidates = configured ? [configured] : (environment.PATH ?? "")
@@ -12,7 +18,7 @@ export async function resolveExecutable(configured, environment = process.env) {
     for (const candidate of candidates) {
         if (!path.isAbsolute(candidate)) throw new Error("The msagent executable path must be absolute.");
         if (windows && !/\.(?:exe|cmd)$/i.test(candidate)) {
-            throw new Error("Supply a native .exe or the standard .NET 10 msagent.cmd launcher.");
+            throw new Error("Supply a native .exe or the standard .NET msagent.cmd launcher.");
         }
         try {
             await access(candidate, constants.X_OK);
@@ -22,7 +28,7 @@ export async function resolveExecutable(configured, environment = process.env) {
         }
         return windows && /\.cmd$/i.test(candidate) ? resolveWindowsLauncher(candidate) : candidate;
     }
-    throw new Error("msagent was not found. Install a compatible CLI or supply its absolute executable path.");
+    throw new Error("msagent was not found. Install a compatible CLI or set MSAGENT_CANVAS_EXECUTABLE to its absolute executable path.");
 }
 
 async function resolveWindowsLauncher(launcher) {
@@ -40,9 +46,8 @@ async function resolveWindowsLauncher(launcher) {
     } finally {
         await file.close();
     }
-    // Interpret only the current SDK's forwarding template; never execute batch source.
-    const match = /^@echo off\r?\n"%~dp0(\.store\\microsoft\.agents\.hosting\.cli\\([0-9][0-9A-Za-z.+-]*)\\microsoft\.agents\.hosting\.cli\.(win-(?:x64|x86|arm64))\\\2\\tools\\net10\.0\\\3\\Microsoft\.Agents\.Hosting\.Cli\.exe)" %\*(?:\r?\n)?$/i.exec(source);
-    if (!match) throw new Error("msagent.cmd is not a standard .NET 10 launcher. Supply the native CLI executable path.");
+    const match = /^@echo off\r?\n"%~dp0(\.store\\microsoft\.agents\.hosting\.cli\\([0-9][0-9A-Za-z.+-]*)\\microsoft\.agents\.hosting\.cli\.(win-(?:x64|x86|arm64))\\\2\\tools\\net[0-9]+\.[0-9]+\\\3\\Microsoft\.Agents\.Hosting\.Cli\.exe)" %\*(?:\r?\n)?$/i.exec(source);
+    if (!match) throw new Error("msagent.cmd is not a standard .NET launcher. Set MSAGENT_CANVAS_EXECUTABLE to the native CLI executable path.");
     const executable = path.join(path.dirname(launcher), match[1]);
     try {
         await access(executable, constants.X_OK);
@@ -53,7 +58,7 @@ async function resolveWindowsLauncher(launcher) {
     return executable;
 }
 
-export function runCommand(executable, args, { signal, timeout = 120_000, limit = 4 * 1024 * 1024, onStdout } = {}) {
+export function runCommand(executable, args, { signal, timeout = limits.commandTimeoutMs, limit = limits.setupOutputBytes, onStdout } = {}) {
     return new Promise((resolve, reject) => {
         let child;
         let failure;
@@ -172,12 +177,13 @@ export function validateTarget(target) {
 }
 
 export function validateConfiguredInput(input) {
+    if (input && Object.hasOwn(input, "executablePath")) {
+        throw new Error("executablePath is no longer a canvas input. Set MSAGENT_CANVAS_EXECUTABLE in the app environment and reopen the canvas without executablePath.");
+    }
     if (!input || typeof input !== "object" || Array.isArray(input) ||
-        Object.keys(input).some(key => !["chatId", "target", "agentName", "executablePath"].includes(key)) ||
+        Object.keys(input).some(key => !["chatId", "target", "agentName"].includes(key)) ||
         typeof input.chatId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.chatId) ||
-        (input.agentName !== undefined && (typeof input.agentName !== "string" || input.agentName.length > 256 || !/\S/.test(input.agentName))) ||
-        (input.executablePath !== undefined && (typeof input.executablePath !== "string" || input.executablePath.length > 4096 ||
-            !path.isAbsolute(input.executablePath) || /[\x00-\x1f]/.test(input.executablePath)))) {
+        (input.agentName !== undefined && (typeof input.agentName !== "string" || input.agentName.length > 256 || !/\S/.test(input.agentName)))) {
         throw new Error("Invalid configured canvas input.");
     }
     validateTarget(input.target);

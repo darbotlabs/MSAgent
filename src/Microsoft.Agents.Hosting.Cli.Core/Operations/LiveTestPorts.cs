@@ -19,10 +19,9 @@ public interface ILiveTestSession : IAsyncDisposable
     string? ServiceConversationId { get; }
     IAsyncEnumerable<JsonElement> StartAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<JsonElement> QueryAsync(string query, string conversationId, CancellationToken cancellationToken);
+    /// <summary>Execute a query with explicit attachments. Implementations must handle an empty attachment list.</summary>
     IAsyncEnumerable<JsonElement> QueryAsync(string query, string conversationId,
-        IReadOnlyList<LiveTestAttachment> attachments, CancellationToken cancellationToken) =>
-        attachments.Count == 0 ? QueryAsync(query, conversationId, cancellationToken)
-            : throw new NotSupportedException("This live-test session does not support attachments.");
+        IReadOnlyList<LiveTestAttachment> attachments, CancellationToken cancellationToken);
 }
 
 /// <summary>Privacy-safe category and guidance for a live-test failure.</summary>

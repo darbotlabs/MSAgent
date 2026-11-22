@@ -8,25 +8,72 @@ namespace Microsoft.Agents.Hosting.Cli.Tests;
 
 public sealed class LiveTestExecutionTests
 {
-    [Fact]
-    public async Task QueryReadsExplicitFilesAndPreservesTheirNamesAndBytes()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public async Task QueryReadsExplicitFilesAndPreservesTheirNamesAndBytes(int fileCount)
     {
         var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
         try
         {
-            var file = Path.Combine(directory.FullName, "study.xlsx");
-            await File.WriteAllBytesAsync(file, [1, 2, 3]);
+            var files = Enumerable.Range(1, fileCount)
+                .Select(index => Path.Combine(directory.FullName, $"study-{index}.xlsx")).ToArray();
+            foreach (var file in files)
+                await File.WriteAllBytesAsync(file, [1, 2, 3]);
             var session = new FakeSession();
             var execution = new LiveTestExecution(
-                new LiveTestRequest { Query = "compare", Files = [file], ConversationId = "existing", Json = true },
+                new LiveTestRequest { Query = "compare", Files = files, ConversationId = "existing", Json = true },
                 _ => new LiveTestDestination("synthetic", "tenant", "schema", "explicit"),
                 (_, _, _) => Task.FromResult("token"), (_, _, _) => session);
             Assert.Equal(0, await execution.RenderAsync(new StringWriter(), new StringWriter(), false, CancellationToken.None));
-            var attachment = Assert.Single(session.Attachments);
-            Assert.Equal("study.xlsx", attachment.Name);
-            Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", attachment.ContentType);
-            Assert.Equal(new byte[] { 1, 2, 3 }, attachment.Content);
+            Assert.Equal(fileCount, session.Attachments.Count);
+            for (var index = 0; index < files.Length; index++)
+            {
+                var attachment = session.Attachments[index];
+                Assert.Equal(Path.GetFileName(files[index]), attachment.Name);
+                Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", attachment.ContentType);
+                Assert.Equal(new byte[] { 1, 2, 3 }, attachment.Content);
+            }
             Assert.Equal(1, session.QueryCalls);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(6, false)]
+    [InlineData(1, true)]
+    public async Task InvalidFileCombinationsFailBeforeResolutionOrAuthentication(int fileCount, bool startConversation)
+    {
+        var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
+        try
+        {
+            var files = Enumerable.Range(1, fileCount)
+                .Select(index => Path.Combine(directory.FullName, $"study-{index}.txt")).ToArray();
+            foreach (var file in files)
+                await File.WriteAllBytesAsync(file, [1, 2, 3]);
+            var execution = new LiveTestExecution(
+                new LiveTestRequest
+                {
+                    Query = startConversation ? null : "compare",
+                    StartConversation = startConversation,
+                    Files = files,
+                    Json = true
+                },
+                _ => throw new InvalidOperationException("Resolution must not run."),
+                (_, _, _) => throw new InvalidOperationException("Authentication must not run."),
+                (_, _, _) => throw new InvalidOperationException("Session must not start."));
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            Assert.Equal(2, await execution.RenderAsync(output, error, false, CancellationToken.None));
+
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("invalid-input", result.RootElement.GetProperty("errorKind").GetString());
+            Assert.Equal("Attach at most five files to a query, not to --start-conversation.",
+                result.RootElement.GetProperty("errorMessage").GetString());
+            Assert.Equal("not-attempted", result.RootElement.GetProperty("queryDelivery").GetString());
+            Assert.Equal(0, result.RootElement.GetProperty("activityCount").GetInt32());
+            Assert.Empty(error.ToString());
         }
         finally { directory.Delete(recursive: true); }
     }
