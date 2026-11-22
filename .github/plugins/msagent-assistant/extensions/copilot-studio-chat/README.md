@@ -29,8 +29,9 @@ or run agent actions.
 - **Send:** Enter sends a message; Shift+Enter adds a line. Replies stream into
   the conversation with Markdown formatting.
 - **Files:** use **Attach files** to include files with a message. Files returned
-  by the agent are listed with a **Download** button, but downloads don't work in
-  the Copilot app yet. See [Limits](#limits).
+  by the agent are shown as filename buttons. Clicking an available file saves
+  it to your Downloads folder and shows it in your file manager. It never opens
+  the file.
 - **Inspect:** switch to **Debug** for raw activities and CLI responses, including
   tool events. Use **Find in debug data**, or a message's **View debug** menu.
   **Expand chunks** reveals grouped streaming updates.
@@ -48,7 +49,9 @@ Closing the panel clears its chat history.
 - **Chat history:** up to 100 messages, counting both yours and the agent's, including opening greetings. Saved conversation data is also limited to roughly one million characters, including message metadata. Start a new chat when the history fills up.
 - **Debug history:** keeps up to 1 MB of raw responses, including tool events, separately from the chat transcript. Older debug details are removed first.
 - **Uploads:** attach up to five files to a message, totaling at most 10 MiB.
-- **Downloads:** the Copilot app doesn't support downloads from canvases yet, so **Download** does nothing. Each returned file can be up to 10 MiB.
+- **Saved files:** each returned file can be up to 10 MiB. Existing files are never overwritten; a suffix is added to the name instead. Files go to the Downloads folder of the machine running the extension. If its configured Downloads folder cannot be determined, the extension uses `~/Downloads` and shows a warning. New files have owner-only permissions on Unix where supported; on macOS and Windows the extension attempts to mark them as downloaded and warns if it cannot.
+- **Browser downloads:** browser-style downloads inside the canvas appear to be a limitation of the Copilot app. This extension saves files through its backend instead.
+- **Restored transcripts:** files cannot be downloaded after a saved transcript has been reloaded, such as after an extension restart. Their filename buttons are disabled. Ask the agent to return the file again.
 - **Waiting for a response:** each request has a two-minute timeout. If delivery is uncertain, the canvas prompts you to click **Start new chat**.
 - **Long or complex replies:** may appear as plain text, preserving the full text.
 

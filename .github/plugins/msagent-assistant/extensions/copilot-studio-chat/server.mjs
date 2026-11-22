@@ -2,8 +2,9 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { limits } from "./limits.mjs";
+import { saveAndReveal } from "./save.mjs";
 
-export async function startServer(chat) {
+export async function startServer(chat, { saveFile = saveAndReveal } = {}) {
     const capability = randomBytes(32).toString("hex");
     const assets = new Map(await Promise.all([
         ["/", "index.html", "text/html; charset=utf-8"],
@@ -58,8 +59,10 @@ export async function startServer(chat) {
             }).catch(error => { if (!response.destroyed) reply(400, { error: error.message }); });
             return;
         }
+        const save = /^\/files\/([a-f0-9]{32})\/save$/.exec(route);
         if (request.method !== "POST" || request.headers.origin !== origin ||
-            request.headers["content-type"] !== "application/json" || !["/setup", "/check", "/connect", "/send", "/reset", "/cancel"].includes(route)) {
+            request.headers["content-type"] !== "application/json" ||
+            (!save && !["/setup", "/check", "/connect", "/send", "/reset", "/cancel"].includes(route))) {
             request.resume();
             return reply(400, { error: "Unsupported request." });
         }
@@ -76,6 +79,17 @@ export async function startServer(chat) {
             try {
                 const input = JSON.parse(body);
                 if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid request.");
+                if (save) {
+                    if (!chat.files) throw new Error("Choose an agent before saving files.");
+                    const controller = new AbortController();
+                    response.once("close", () => controller.abort());
+                    void chat.files.download(save[1], controller.signal).then(async file => {
+                        try { return await saveFile(file); }
+                        catch { throw new Error("The file could not be saved to your Downloads folder."); }
+                    }).then(saved => { if (!response.destroyed) reply(200, saved); },
+                        error => { if (!response.destroyed) reply(400, { error: error.message }); });
+                    return;
+                }
                 if (route === "/cancel") chat.cancel();
                 else chat.start(route.slice(1), input);
                 reply(202, { accepted: true });

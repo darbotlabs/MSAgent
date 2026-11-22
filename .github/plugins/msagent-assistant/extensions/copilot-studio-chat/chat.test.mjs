@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { request } from "node:http";
-import { access, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
@@ -16,6 +16,7 @@ import { FileDownloads, fileLimit, uploads, withUploadedFiles, publicAddress, do
 import { SetupChat } from "./setup.mjs";
 import { limits } from "./limits.mjs";
 import { Status, classifyFailure } from "./state.mjs";
+import { downloadsDirectory, revealCommand, saveAndReveal, writeUnique } from "./save.mjs";
 
 const target = { schemaName: "agent_schema", environmentId: "env-id",
     tenantId: "11111111-1111-1111-1111-111111111111", deploymentName: "development" };
@@ -327,6 +328,179 @@ test("chat sends staged file paths once, keeps only upload metadata and exposes 
         assert.equal(await response.text(), "answer");
         await chat.start("reset");
         assert.equal((await fetch(address, { headers })).status, 400);
+    } finally { await server.close(); }
+});
+
+test("saved files never overwrite existing files and use numbered names", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        await writeFile(path.join(directory, "answer.txt"), "existing");
+        const first = await writeUnique(path.join(directory, "nested"), "answer.txt", Buffer.from("a"));
+        assert.equal(first, path.join(directory, "nested", "answer.txt"));
+        assert.equal(await writeUnique(directory, "answer.txt", Buffer.from("b")), path.join(directory, "answer (1).txt"));
+        assert.equal(await writeUnique(directory, "answer.txt", Buffer.from("c")), path.join(directory, "answer (2).txt"));
+        assert.equal((await readFile(path.join(directory, "answer.txt"))).toString(), "existing");
+        assert.equal((await readFile(path.join(directory, "answer (2).txt"))).toString(), "c");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("saved files and newly created folders are owner-only on Unix", { skip: process.platform === "win32" }, async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        const folder = path.join(directory, "nested");
+        const file = await writeUnique(folder, "answer.txt", Buffer.from("private"));
+        assert.equal((await stat(folder)).mode & 0o077, 0);
+        assert.equal((await stat(file)).mode & 0o077, 0);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("saved files remain unique after the numbered names are exhausted", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        await Promise.all(Array.from({ length: 100 }, (_, index) =>
+            writeFile(path.join(directory, index ? `answer (${index}).txt` : "answer.txt"), "existing")));
+        const file = await writeUnique(directory, "answer.txt", Buffer.from("new"));
+        assert.match(path.basename(file), /^answer \([0-9a-f-]{36}\)\.txt$/);
+        assert.equal((await readFile(file)).toString(), "new");
+        assert.equal((await readFile(path.join(directory, "answer (99).txt"))).toString(), "existing");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("configured Downloads folders are used on Windows and Linux", async () => {
+    for (const [platform, home, expected, command] of [
+        ["win32", "C:\\Users\\me", "D:\\Redirected\\Downloads", "powershell.exe"],
+        ["linux", "/home/me", "/mnt/shared/Downloads", "xdg-user-dir"],
+    ]) {
+        const calls = [];
+        const resolved = await downloadsDirectory({ home, platform, execute(name, args, options, callback) {
+            calls.push([name, args]);
+            assert.equal(options.shell, undefined);
+            callback(null, `${expected}\n`);
+        } });
+        assert.deepEqual(resolved, { directory: expected });
+        assert.equal(calls[0][0], command);
+        assert.equal(calls.length, 1);
+    }
+});
+
+test("an invalid configured Downloads path uses the default with a warning", async () => {
+    const resolved = await downloadsDirectory({
+        home: "C:\\Users\\me", platform: "win32",
+        execute(command, args, options, callback) { callback(null, "relative-path\n"); },
+    });
+    assert.equal(resolved.directory, "C:\\Users\\me\\Downloads");
+    assert.match(resolved.warning, /Could not determine your configured Downloads folder/);
+});
+
+test("a failed Downloads folder lookup is reported with the saved path", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") }, {
+            home, platform: "linux", execute(command, args, options, callback) {
+                callback(command === "xdg-user-dir" ? new Error("not found") : null);
+            },
+        });
+        assert.equal(saved.path, path.join(home, "Downloads", "answer.txt"));
+        assert.equal((await readFile(saved.path)).toString(), "answer");
+        assert.match(saved.warning, /Could not determine your configured Downloads folder/);
+    } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("saved files are revealed without a shell and never opened", async () => {
+    const file = path.join("/downloads", "a b.txt");
+    assert.deepEqual(revealCommand(file, "darwin"), { command: "open", args: ["-R", file] });
+    assert.deepEqual(revealCommand(file, "linux"), { command: "xdg-open", args: ["/downloads"] });
+    assert.deepEqual(revealCommand("C:\\Users\\me\\Downloads\\a b.txt", "win32"), { command: "explorer.exe",
+        args: ['/select,"C:\\Users\\me\\Downloads\\a b.txt"'], options: { windowsVerbatimArguments: true } });
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        for (const [platform, failure, revealed] of [
+            ["darwin", null, true], ["win32", Object.assign(new Error("exit"), { code: 1 }), false],
+            ["linux", Object.assign(new Error("missing"), { code: "ENOENT" }), false],
+        ]) {
+            const calls = [];
+            const zones = [];
+            const execute = (command, args, options, callback) => {
+                calls.push([command, ...args]);
+                assert.equal(options.shell, undefined);
+                callback(command === "xattr" ? null : failure);
+            };
+            const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") },
+                { directory, platform, execute, now: () => 0x10000, writeZone: async (...args) => zones.push(args) });
+            assert.equal(saved.revealed, revealed);
+            assert.equal((await readFile(saved.path)).toString(), "answer");
+            assert.deepEqual(calls.map(call => call[0]), platform === "darwin" ? ["xattr", "open"] :
+                [platform === "win32" ? "explorer.exe" : "xdg-open"]);
+            if (platform === "darwin") assert.deepEqual(calls[0], ["xattr", "-w", "com.apple.quarantine", "0081;41;msagent;", saved.path]);
+            assert.deepEqual(zones, platform === "win32" ? [[`${saved.path}:Zone.Identifier`, "[ZoneTransfer]\r\nZoneId=3\r\n"]] : []);
+        }
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a macOS quarantine failure is reported while the saved file remains available", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") }, {
+            directory, platform: "darwin",
+            execute(command, args, options, callback) {
+                callback(command === "xattr" ? new Error("quarantine failed") : null);
+            },
+        });
+        assert.equal((await readFile(saved.path)).toString(), "answer");
+        assert.equal(saved.revealed, true);
+        assert.match(saved.warning, /macOS could not mark the file as downloaded/);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a Windows download security marking failure is reported while the saved file remains available", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") }, {
+            directory, platform: "win32",
+            execute(command, args, options, callback) { callback(null); },
+            async writeZone() { throw new Error("marking failed"); },
+        });
+        assert.equal((await readFile(saved.path)).toString(), "answer");
+        assert.equal(saved.revealed, true);
+        assert.match(saved.warning, /Windows could not mark the file as downloaded/);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the protected gateway saves returned files only through authorized same-origin POST requests", async () => {
+    const result = { ...outcome, activities: [{ type: "message", attachments: [
+        { name: "answer.txt", contentType: "text/plain", contentUrl: "data:text/plain;base64,YW5zd2Vy" },
+    ] }] };
+    const { chat } = fixture(args => args[1] === "ask" && !args.includes("--help") ? json(result) : undefined);
+    await chat.start("send", { query: "Analyze" });
+    const file = chat.snapshot().messages.at(-1).files[0];
+    const saved = [];
+    let failure;
+    const server = await startServer(chat, { async saveFile(entry) {
+        if (failure) throw failure;
+        saved.push(entry);
+        return { path: `/downloads/${entry.name}`, revealed: true };
+    } });
+    const url = new URL(server.url);
+    const address = `${url.origin}/files/${file.id}/save`;
+    const post = headers => fetch(address, { method: "POST", body: "{}", headers: {
+        Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json", ...headers } });
+    try {
+        assert.equal((await post({ Authorization: "Bearer wrong" })).status, 403);
+        assert.equal((await post({ Origin: "https://attacker.test" })).status, 403);
+        assert.equal((await post({ "Content-Type": "text/plain" })).status, 400);
+        assert.equal((await fetch(address, { headers: { Authorization: `Bearer ${url.hash.slice(1)}` } })).status, 400);
+        assert.equal(saved.length, 0);
+        const response = await post();
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { path: "/downloads/answer.txt", revealed: true });
+        assert.deepEqual(saved.map(entry => [entry.name, entry.content.toString()]), [["answer.txt", "answer"]]);
+        failure = Object.assign(new Error("EACCES: /secret/path"), { code: "EACCES" });
+        const denied = await post();
+        assert.equal(denied.status, 400);
+        assert.deepEqual(await denied.json(), { error: "The file could not be saved to your Downloads folder." });
+        failure = undefined;
+        await chat.start("reset");
+        assert.match((await (await post()).json()).error, /no longer available/);
     } finally { await server.close(); }
 });
 
@@ -660,6 +834,108 @@ test("an unreachable service shows reconnect guidance when an action fails", asy
     await get("new-chat").events.click();
     assert.equal(get("error").textContent,
         "The canvas could not reach its local chat service. Reopen this canvas to reconnect.");
+});
+
+test("file save status stays outside the scrolling transcript", async () => {
+    const html = await readFile(new URL("index.html", import.meta.url), "utf8");
+    const status = html.indexOf('id="file-status"');
+    assert(status > html.indexOf("</main>"));
+    assert(status > html.indexOf('<form id="composer">'));
+    assert(status < html.indexOf("</form>"));
+});
+
+test("returned file buttons save through the local service and show where the file went", async () => {
+    const state = { status: "ready", busy: false, target, error: null, messages: [
+        { role: "assistant", turnId: 1, text: "Here", files: [{ id: "a".repeat(32), name: "answer.txt" }] },
+    ] };
+    const posts = [];
+    let revealed = true;
+    let warning;
+    const { get } = await uiFixture(state, (route, options) => {
+        if (route.startsWith("/files/")) {
+            posts.push([route, options.method, options.body]);
+            return { ok: true, json: async () => ({ path: "/Users/me/Downloads/answer.txt", revealed, warning }) };
+        }
+    });
+    const button = descendants(get("messages").children[0]).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    assert.equal(button["aria-label"], "Save answer.txt to Downloads");
+    assert.equal(button.disabled, false);
+    await button.events.click();
+    assert.deepEqual(posts, [[`/files/${"a".repeat(32)}/save`, "POST", "{}"]]);
+    assert.equal(get("file-status").hidden, false);
+    assert.equal(get("file-status").textContent, "Saved answer.txt to /Users/me/Downloads/answer.txt.");
+    assert.equal(button.disabled, false);
+    revealed = false;
+    await button.events.click();
+    assert.match(get("file-status").textContent, /Could not confirm it was shown in your file manager/);
+    revealed = true;
+    warning = "macOS could not mark the file as downloaded.";
+    await button.events.click();
+    assert.match(get("file-status").textContent, /macOS could not mark the file as downloaded/);
+    assert.equal(get("file-status").role, "alert");
+});
+
+test("failed file saves show an error and re-enable the filename button", async () => {
+    const state = { status: "ready", busy: false, target, error: null, messages: [
+        { role: "assistant", turnId: 1, text: "Here", files: [{ id: "a".repeat(32), name: "answer.txt" }] },
+    ] };
+    let failed = true;
+    const { get, refresh } = await uiFixture(state, route => route.startsWith("/files/")
+        ? failed
+            ? { ok: false, json: async () => ({ error: "The file could not be saved to your Downloads folder." }) }
+            : { ok: true, json: async () => ({ path: "/Downloads/answer.txt", revealed: true }) }
+        : undefined);
+    get("file-status").hidden = true;
+    const button = descendants(get("messages").children[0]).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    await button.events.click();
+    assert.equal(get("file-status").textContent, "The file could not be saved to your Downloads folder.");
+    assert.equal(get("file-status").role, "alert");
+    assert.equal(button.disabled, false);
+    await refresh();
+    assert.equal(get("file-status").textContent, "The file could not be saved to your Downloads folder.");
+    assert.equal(get("file-status").hidden, false);
+    failed = false;
+    await button.events.click();
+    assert.equal(get("file-status").textContent, "Saved answer.txt to /Downloads/answer.txt.");
+    assert.equal(get("file-status").role, "status");
+});
+
+test("restored returned files have disabled filename buttons while uploaded files remain labels", async () => {
+    const state = { status: "ready", busy: false, target, error: null, messages: [
+        { role: "user", turnId: 1, text: "Analyze", files: [{ name: "input.txt" }] },
+        { role: "assistant", turnId: 1, text: "Here", files: [{ name: "answer.txt" }] },
+    ] };
+    const { get, calls } = await uiFixture(state);
+    const upload = descendants(get("messages").children[0]).find(node => node.tagName === "span" && node.textContent === "Attached: input.txt");
+    assert.equal(upload.tagName, "span");
+    const returned = descendants(get("messages").children[1]).find(node => node.tagName === "button" && node.textContent === "answer.txt");
+    assert.equal(returned.disabled, true);
+    assert.match(returned.title, /transcript was restored.*provide it again/);
+    assert.equal(returned.events.click, undefined);
+    assert.deepEqual(calls, ["/state"]);
+});
+
+test("a real saved and restored transcript shows returned files as disabled buttons", async () => {
+    const result = { ...outcome, activities: [{ type: "message", attachments: [
+        { name: "answer.txt", contentType: "text/plain", contentUrl: "data:text/plain;base64,YW5zd2Vy" },
+    ] }] };
+    const { chat } = fixture(args => args[1] === "ask" && !args.includes("--help") ? json(result) : undefined);
+    await chat.start("connect");
+    await chat.start("send", { query: "Return a file" });
+    const liveFile = chat.snapshot().messages.at(-1).files[0];
+    assert.match(liveFile.id, /^[a-f0-9]{32}$/);
+    const saved = chat.saved();
+    assert.deepEqual(saved.messages.at(-1).files, [{ name: "answer.txt" }]);
+    const restored = fixture().chat;
+    await restored.start("check");
+    assert.equal(restored.restore(saved), true);
+    const { get, calls } = await uiFixture(restored.snapshot());
+    const button = get("messages").children.map(article =>
+        descendants(article).find(node => node.tagName === "button" && node.textContent === "answer.txt")).find(Boolean);
+    assert.equal(button.disabled, true);
+    assert.match(button.title, /transcript was restored.*provide it again/);
+    assert.equal(button.events.click, undefined);
+    assert.deepEqual(calls, ["/state"]);
 });
 
 test("message ellipses jump to the matching raw response or input even for repeated text and pruned response history", async () => {

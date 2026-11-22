@@ -67,6 +67,7 @@
     <p id="error" role="alert" hidden></p>
   </main>
   <form id="composer">
+    <p id="file-status" class="notice" role="status" aria-live="polite" hidden></p>
     <div class="composer-input">
       <textarea id="query" rows="3" placeholder="Ask your agent…" aria-label="Ask your agent" required></textarea>
       <label class="file-picker" for="files" title="Attach files: up to 5 files, 10 MiB total. Sent only with your message."><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 7.5 7 13a3 3 0 0 1-4.25-4.25l6.5-6.5a2 2 0 0 1 2.83 2.83L6 11.17a1 1 0 0 1-1.42-1.42l5.3-5.3"/></svg><input id="files" type="file" aria-label="Attach files" multiple></label>

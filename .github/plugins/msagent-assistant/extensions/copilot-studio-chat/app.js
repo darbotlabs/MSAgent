@@ -52,19 +52,27 @@ function renderPendingFiles() {
     }));
 }
 
-async function downloadFile(file, button) {
+async function saveFile(file, button) {
     button.disabled = true;
+    const status = element("file-status");
+    status.hidden = true;
+    let isError = false;
     try {
-        const response = await fetch(`/files/${file.id}`, { headers: { Authorization: `Bearer ${capability}` } });
-        if (!response.ok) throw new Error((await response.json()).error ?? "The file could not be downloaded.");
-        const url = URL.createObjectURL(await response.blob());
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = file.name;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (error) { showError(error.message); }
-    finally { button.disabled = false; }
+        const saved = await api(`/files/${file.id}/save`, {});
+        status.textContent = `Saved ${file.name} to ${saved.path}.` +
+            (saved.revealed ? "" : " Could not confirm it was shown in your file manager.") +
+            (saved.warning ? ` ${saved.warning}` : "");
+        isError = Boolean(saved.warning);
+    } catch (error) {
+        status.textContent = error.message;
+        isError = true;
+    } finally {
+        status.className = isError ? "file-error" : "notice";
+        status.setAttribute("role", isError ? "alert" : "status");
+        status.setAttribute("aria-live", isError ? "assertive" : "polite");
+        status.hidden = false;
+        button.disabled = false;
+    }
 }
 
 function highlightDebug(scroll = false) {
@@ -418,11 +426,17 @@ async function refresh() {
                     const files = document.createElement("div");
                     files.className = "message-files";
                     for (const file of message.files) {
-                        const item = document.createElement(file.id ? "button" : "span");
-                        item.textContent = file.id ? `Download ${file.name}` : `Attached: ${file.name}`;
-                        if (file.id) {
+                        const returned = message.role === "assistant";
+                        const item = document.createElement(returned ? "button" : "span");
+                        item.textContent = returned ? file.name : `Attached: ${file.name}`;
+                        if (returned) {
                             item.type = "button";
-                            item.addEventListener("click", () => downloadFile(file, item));
+                            item.disabled = !file.id;
+                            item.title = file.id ? "Save to your Downloads folder" :
+                                "This file is unavailable after the transcript was restored. Ask the agent to provide it again.";
+                            item.setAttribute("aria-label", file.id ? `Save ${file.name} to Downloads` :
+                                `${file.name} (unavailable after transcript restoration)`);
+                            if (file.id) item.addEventListener("click", () => saveFile(file, item));
                         }
                         files.append(item);
                     }
