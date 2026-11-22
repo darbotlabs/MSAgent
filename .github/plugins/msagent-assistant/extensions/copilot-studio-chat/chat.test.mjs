@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { request } from "node:http";
 import { access, copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
@@ -375,6 +376,7 @@ test("configured Downloads folders are used on Windows and Linux", async () => {
         const resolved = await downloadsDirectory({ home, platform, execute(name, args, options, callback) {
             calls.push([name, args]);
             assert.equal(options.shell, undefined);
+            assert.equal(options.windowsHide, true);
             callback(null, `${expected}\n`);
         } });
         assert.deepEqual(resolved, { directory: expected });
@@ -411,11 +413,11 @@ test("saved files are revealed without a shell and never opened", async () => {
     assert.deepEqual(revealCommand(file, "darwin"), { command: "open", args: ["-R", file] });
     assert.deepEqual(revealCommand(file, "linux"), { command: "xdg-open", args: ["/downloads"] });
     assert.deepEqual(revealCommand("C:\\Users\\me\\Downloads\\a b.txt", "win32"), { command: "explorer.exe",
-        args: ['/select,"C:\\Users\\me\\Downloads\\a b.txt"'], options: { windowsVerbatimArguments: true } });
+        args: ['/select,"C:\\Users\\me\\Downloads\\a b.txt"'], options: { windowsVerbatimArguments: true, windowsHide: false } });
     const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
     try {
         for (const [platform, failure, revealed] of [
-            ["darwin", null, true], ["win32", Object.assign(new Error("exit"), { code: 1 }), false],
+            ["darwin", null, true], ["win32", Object.assign(new Error("missing"), { code: "ENOENT" }), false],
             ["linux", Object.assign(new Error("missing"), { code: "ENOENT" }), false],
         ]) {
             const calls = [];
@@ -425,8 +427,16 @@ test("saved files are revealed without a shell and never opened", async () => {
                 assert.equal(options.shell, undefined);
                 callback(command === "xattr" ? null : failure);
             };
+            const launch = (command, args, options) => {
+                calls.push([command, ...args]);
+                assert.equal(options.shell, false);
+                assert.equal(options.windowsHide, false);
+                const child = new EventEmitter();
+                queueMicrotask(() => child.emit("error", failure));
+                return child;
+            };
             const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") },
-                { directory, platform, execute, now: () => 0x10000, writeZone: async (...args) => zones.push(args) });
+                { directory, platform, execute, launch, now: () => 0x10000, writeZone: async (...args) => zones.push(args) });
             assert.equal(saved.revealed, revealed);
             assert.equal((await readFile(saved.path)).toString(), "answer");
             assert.deepEqual(calls.map(call => call[0]), platform === "darwin" ? ["xattr", "open"] :
@@ -434,6 +444,44 @@ test("saved files are revealed without a shell and never opened", async () => {
             if (platform === "darwin") assert.deepEqual(calls[0], ["xattr", "-w", "com.apple.quarantine", "0081;41;msagent;", saved.path]);
             assert.deepEqual(zones, platform === "win32" ? [[`${saved.path}:Zone.Identifier`, "[ZoneTransfer]\r\nZoneId=3\r\n"]] : []);
         }
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Windows reveal reports successful visible launch without waiting for Explorer's broker exit", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        let child;
+        let unreferenced = false;
+        const saved = await saveAndReveal({ name: "answer & notes.txt", content: Buffer.from("answer") }, {
+            directory, platform: "win32", writeZone: async () => {},
+            execute() { assert.fail("Windows reveal must not wait for execFile's exit callback."); },
+            launch(command, args, options) {
+                assert.equal(command, "explorer.exe");
+                assert.deepEqual(args, [`/select,"${path.join(directory, "answer & notes.txt")}"`]);
+                assert.deepEqual(options, { shell: false, stdio: "ignore", detached: true, windowsVerbatimArguments: true, windowsHide: false });
+                child = new EventEmitter();
+                child.unref = () => { unreferenced = true; };
+                queueMicrotask(() => child.emit("spawn"));
+                return child;
+            },
+        });
+        assert.equal(saved.revealed, true);
+        assert.equal(unreferenced, true);
+        child.emit("exit", 1, null);
+        assert.equal(saved.revealed, true);
+        assert.equal((await readFile(saved.path)).toString(), "answer");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Windows reveal launch exceptions keep the saved file and report reveal failure", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "msagent-save-"));
+    try {
+        const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") }, {
+            directory, platform: "win32", writeZone: async () => {},
+            launch() { throw new Error("Could not launch Explorer."); },
+        });
+        assert.equal(saved.revealed, false);
+        assert.equal((await readFile(saved.path)).toString(), "answer");
     } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -458,6 +506,12 @@ test("a Windows download security marking failure is reported while the saved fi
         const saved = await saveAndReveal({ name: "answer.txt", content: Buffer.from("answer") }, {
             directory, platform: "win32",
             execute(command, args, options, callback) { callback(null); },
+            launch() {
+                const child = new EventEmitter();
+                child.unref = () => {};
+                queueMicrotask(() => child.emit("spawn"));
+                return child;
+            },
             async writeZone() { throw new Error("marking failed"); },
         });
         assert.equal((await readFile(saved.path)).toString(), "answer");

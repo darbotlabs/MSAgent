@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -40,7 +40,8 @@ export async function writeUnique(directory, name, content) {
 
 export function revealCommand(file, platform = process.platform) {
     if (platform === "darwin") return { command: "open", args: ["-R", file] };
-    if (platform === "win32") return { command: "explorer.exe", args: [`/select,"${file}"`], options: { windowsVerbatimArguments: true } };
+    if (platform === "win32") return { command: "explorer.exe", args: [`/select,"${file}"`],
+        options: { windowsVerbatimArguments: true, windowsHide: false } };
     return { command: "xdg-open", args: [path.posix.dirname(file)] };
 }
 
@@ -51,8 +52,26 @@ function run(execute, command, args, options = {}) {
     });
 }
 
+function launchExplorer(launch, command, args, options) {
+    return new Promise(resolve => {
+        let child;
+        try {
+            child = launch(command, args, { shell: false, stdio: "ignore", detached: true, ...options });
+        } catch (error) {
+            resolve({ error });
+            return;
+        }
+        child.once("error", error => resolve({ error }));
+        child.once("spawn", () => {
+            // Explorer can return a nonzero broker exit code after successfully revealing the file.
+            child.unref();
+            resolve({ error: null });
+        });
+    });
+}
+
 export async function saveAndReveal(file, {
-    directory, home = homedir(), platform = process.platform, execute = execFile, now = Date.now, writeZone = writeFile,
+    directory, home = homedir(), platform = process.platform, execute = execFile, launch = spawn, now = Date.now, writeZone = writeFile,
 } = {}) {
     const resolved = directory === undefined ? await downloadsDirectory({ home, platform, execute }) : { directory };
     const destination = await writeUnique(resolved.directory, file.name, file.content);
@@ -69,6 +88,7 @@ export async function saveAndReveal(file, {
         }
     }
     const { command, args, options } = revealCommand(destination, platform);
-    const { error } = await run(execute, command, args, options);
+    const { error } = platform === "win32" ? await launchExplorer(launch, command, args, options)
+        : await run(execute, command, args, options);
     return { path: destination, revealed: !error, ...(warnings.length ? { warning: warnings.join(" ") } : {}) };
 }

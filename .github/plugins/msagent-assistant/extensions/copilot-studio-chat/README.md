@@ -42,6 +42,10 @@ or run agent actions.
 
 Closing the panel clears its chat history.
 
+On Windows, file reveal launches Explorer visibly and reports whether that
+launch succeeded. Explorer's shell-broker exit code does not reliably indicate
+whether a file was shown; the canvas cannot confirm the final window selection.
+
 ## Limits
 
 - **Rendering:** HTML and Adaptive Cards are not rendered in Chat. Developers can inspect their raw content in **Debug**. Markdown images appear as alt text.
