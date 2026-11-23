@@ -44,7 +44,7 @@ public sealed class LiveTestExecutionTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(false, false)]
-    public async Task LegacySessionReportsUnsupportedAttachmentsWithoutAttemptingAQuery(
+    public async Task LegacySessionReportsUnsupportedAttachmentsConservatively(
         bool suppliedConversation, bool jsonOutput)
     {
         var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
@@ -73,7 +73,7 @@ public sealed class LiveTestExecutionTests
                 Assert.Equal("unsupported-attachments", result.RootElement.GetProperty("errorKind").GetString());
                 Assert.Equal("This live-test session does not support file attachments.",
                     result.RootElement.GetProperty("errorMessage").GetString());
-                Assert.Equal("not-attempted", result.RootElement.GetProperty("queryDelivery").GetString());
+                Assert.Equal("attempted", result.RootElement.GetProperty("queryDelivery").GetString());
                 Assert.Equal(!suppliedConversation, result.RootElement.GetProperty("partial").GetBoolean());
                 Assert.Equal(suppliedConversation ? "existing" : "created",
                     result.RootElement.GetProperty("conversationId").GetString());
@@ -82,7 +82,7 @@ public sealed class LiveTestExecutionTests
             else
             {
                 Assert.Contains("This live-test session does not support file attachments.", error.ToString(), StringComparison.Ordinal);
-                Assert.Contains("Starting a new conversation may already have caused remote effects.", error.ToString(), StringComparison.Ordinal);
+                Assert.Contains("Verify remote effects before retrying;", error.ToString(), StringComparison.Ordinal);
             }
             Assert.Equal(suppliedConversation ? 0 : 1, session.StartCalls);
             Assert.Equal(0, session.QueryCalls);
@@ -115,18 +115,14 @@ public sealed class LiveTestExecutionTests
     }
 
     [Fact]
-    public async Task AttachmentFailureAfterStreamingRemainsAttempted()
+    public async Task AttachmentFailurePropagatedByWrapperRemainsAttempted()
     {
-        ILiveTestSession legacy = new LegacySession();
-        var failure = Assert.Throws<LiveTestAttachmentsNotSupportedException>(() =>
-            legacy.QueryAsync("compare", "existing",
-                [new LiveTestAttachment("study.txt", "text/plain", [1])], CancellationToken.None));
         var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
         try
         {
             var file = Path.Combine(directory.FullName, "study.txt");
             await File.WriteAllTextAsync(file, "content");
-            var session = new FakeSession { FailureAfterReply = failure };
+            var session = new ForwardingSession();
             var execution = new LiveTestExecution(
                 new LiveTestRequest { Query = "compare", Files = [file], ConversationId = "existing", Json = true },
                 _ => new LiveTestDestination("synthetic", "tenant", "schema", "explicit"),
@@ -136,10 +132,11 @@ public sealed class LiveTestExecutionTests
             Assert.Equal(1, await execution.RenderAsync(output, new StringWriter(), false, CancellationToken.None));
 
             using var result = JsonDocument.Parse(output.ToString());
-            Assert.Equal("internal-error", result.RootElement.GetProperty("errorKind").GetString());
+            Assert.Equal("unsupported-attachments", result.RootElement.GetProperty("errorKind").GetString());
             Assert.Equal("attempted", result.RootElement.GetProperty("queryDelivery").GetString());
-            Assert.True(result.RootElement.GetProperty("partial").GetBoolean());
-            Assert.Equal(1, session.QueryCalls);
+            Assert.False(result.RootElement.GetProperty("partial").GetBoolean());
+            Assert.Equal(1, session.DispatchCalls);
+            Assert.Equal(0, session.LegacySession.QueryCalls);
         }
         finally { directory.Delete(recursive: true); }
     }
@@ -541,7 +538,6 @@ public sealed class LiveTestExecutionTests
         public string? ConversationUsed { get; private set; }
         public bool FailQuery { get; init; }
         public bool FailAttachmentSynchronously { get; init; }
-        public Exception? FailureAfterReply { get; init; }
         public string? ServiceConversationId => StartCalls > 0 ? "confirmed" : null;
 
         public async IAsyncEnumerable<JsonElement> StartAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -561,7 +557,6 @@ public sealed class LiveTestExecutionTests
             yield return JsonDocument.Parse("""{"type":"message","text":"answer"}""").RootElement.Clone();
             await Task.CompletedTask;
             if (FailQuery) throw new IOException("do not leak the service response");
-            if (FailureAfterReply is { } failure) throw failure;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -589,5 +584,29 @@ public sealed class LiveTestExecutionTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ForwardingSession : ILiveTestSession
+    {
+        public LegacySession LegacySession { get; } = new();
+        public int DispatchCalls { get; private set; }
+        public string? ServiceConversationId => LegacySession.ServiceConversationId;
+
+        public IAsyncEnumerable<JsonElement> StartAsync(CancellationToken cancellationToken) =>
+            LegacySession.StartAsync(cancellationToken);
+
+        public IAsyncEnumerable<JsonElement> QueryAsync(
+            string query, string conversationId, CancellationToken cancellationToken) =>
+            LegacySession.QueryAsync(query, conversationId, cancellationToken);
+
+        public IAsyncEnumerable<JsonElement> QueryAsync(
+            string query, string conversationId, IReadOnlyList<LiveTestAttachment> attachments,
+            CancellationToken cancellationToken)
+        {
+            DispatchCalls++;
+            return ((ILiveTestSession)LegacySession).QueryAsync(query, conversationId, attachments, cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => LegacySession.DisposeAsync();
     }
 }

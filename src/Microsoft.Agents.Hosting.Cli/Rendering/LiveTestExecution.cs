@@ -96,20 +96,9 @@ public sealed class LiveTestExecution : ILiveTestStreamingResult, IStreamingFail
             if (!_request.StartConversation)
             {
                 delivery = "attempted";
-                IAsyncEnumerable<JsonElement> replies;
-                try
-                {
-                    replies = attachments.Count == 0
-                        ? session.QueryAsync(_request.Query!, conversationId, cancellationToken)
-                        : session.QueryAsync(_request.Query!, conversationId, attachments, cancellationToken);
-                }
-                catch (LiveTestAttachmentsNotSupportedException unsupportedAttachments) when (attachments.Count > 0)
-                {
-                    // The default overload rejects files synchronously, before dispatch.
-                    delivery = "not-attempted";
-                    throw new LiveTestFailure("unsupported-attachments", 1, unsupportedAttachments.Message,
-                        "Use a session that supports attachments or send the query without files. Starting a new conversation may already have caused remote effects.");
-                }
+                var replies = attachments.Count == 0
+                    ? session.QueryAsync(_request.Query!, conversationId, cancellationToken)
+                    : session.QueryAsync(_request.Query!, conversationId, attachments, cancellationToken);
                 await foreach (var activity in replies.WithCancellation(cancellationToken))
                 {
                     ConfirmId(session.ServiceConversationId, ref conversationId, ref conversationSource);
@@ -292,6 +281,9 @@ public sealed class LiveTestExecution : ILiveTestStreamingResult, IStreamingFail
                 "Remote effects may continue if the query was already sent.");
         if (failure is LiveTestFailure typed)
             return new("failed", typed.ExitCode, typed.Kind, typed.Message, typed.Remediation);
+        if (failure is LiveTestAttachmentsNotSupportedException unsupportedAttachments)
+            return new("failed", 1, "unsupported-attachments", unsupportedAttachments.Message,
+                "Use a session that supports attachments. Verify remote effects before retrying; a session wrapper may already have dispatched the query.");
         if (failure is LiveTestTargetResolutionException targetFailure)
             return new("failed", targetFailure.ExitCode, targetFailure.ErrorKind ?? "invalid-configuration",
                 targetFailure.Message,
