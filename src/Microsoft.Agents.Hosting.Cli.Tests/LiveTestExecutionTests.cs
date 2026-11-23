@@ -40,6 +40,111 @@ public sealed class LiveTestExecutionTests
     }
 
     [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task LegacySessionReportsUnsupportedAttachmentsWithoutAttemptingAQuery(
+        bool suppliedConversation, bool jsonOutput)
+    {
+        var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
+        try
+        {
+            var file = Path.Combine(directory.FullName, "study.txt");
+            await File.WriteAllTextAsync(file, "content");
+            var session = new LegacySession();
+            var execution = new LiveTestExecution(
+                new LiveTestRequest
+                {
+                    Query = "compare", Files = [file],
+                    ConversationId = suppliedConversation ? "existing" : null, Json = jsonOutput
+                },
+                _ => new LiveTestDestination("synthetic", "tenant", "schema", "explicit"),
+                (_, _, _) => Task.FromResult("token"), (_, _, _) => session);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            Assert.Equal(1, await execution.RenderAsync(output, error, false, CancellationToken.None));
+
+            if (jsonOutput)
+            {
+                using var result = JsonDocument.Parse(output.ToString());
+                Assert.Equal("failed", result.RootElement.GetProperty("status").GetString());
+                Assert.Equal("unsupported-attachments", result.RootElement.GetProperty("errorKind").GetString());
+                Assert.Equal("This live-test session does not support file attachments.",
+                    result.RootElement.GetProperty("errorMessage").GetString());
+                Assert.Equal("not-attempted", result.RootElement.GetProperty("queryDelivery").GetString());
+                Assert.Equal(!suppliedConversation, result.RootElement.GetProperty("partial").GetBoolean());
+                Assert.Equal(suppliedConversation ? "existing" : "created",
+                    result.RootElement.GetProperty("conversationId").GetString());
+                Assert.Empty(error.ToString());
+            }
+            else
+            {
+                Assert.Contains("This live-test session does not support file attachments.", error.ToString(), StringComparison.Ordinal);
+                Assert.Contains("Starting a new conversation may already have caused remote effects.", error.ToString(), StringComparison.Ordinal);
+            }
+            Assert.Equal(suppliedConversation ? 0 : 1, session.StartCalls);
+            Assert.Equal(0, session.QueryCalls);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
+    [Fact]
+    public async Task OtherAttachmentFailuresRemainAttempted()
+    {
+        var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
+        try
+        {
+            var file = Path.Combine(directory.FullName, "study.txt");
+            await File.WriteAllTextAsync(file, "content");
+            var session = new FakeSession { FailAttachmentSynchronously = true };
+            var execution = new LiveTestExecution(
+                new LiveTestRequest { Query = "compare", Files = [file], ConversationId = "existing", Json = true },
+                _ => new LiveTestDestination("synthetic", "tenant", "schema", "explicit"),
+                (_, _, _) => Task.FromResult("token"), (_, _, _) => session);
+            using var output = new StringWriter();
+
+            Assert.Equal(1, await execution.RenderAsync(output, new StringWriter(), false, CancellationToken.None));
+
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("internal-error", result.RootElement.GetProperty("errorKind").GetString());
+            Assert.Equal("attempted", result.RootElement.GetProperty("queryDelivery").GetString());
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
+    [Fact]
+    public async Task AttachmentFailureAfterStreamingRemainsAttempted()
+    {
+        ILiveTestSession legacy = new LegacySession();
+        var failure = Assert.Throws<LiveTestAttachmentsNotSupportedException>(() =>
+            legacy.QueryAsync("compare", "existing",
+                [new LiveTestAttachment("study.txt", "text/plain", [1])], CancellationToken.None));
+        var directory = Directory.CreateTempSubdirectory("msagent-file-test-");
+        try
+        {
+            var file = Path.Combine(directory.FullName, "study.txt");
+            await File.WriteAllTextAsync(file, "content");
+            var session = new FakeSession { FailureAfterReply = failure };
+            var execution = new LiveTestExecution(
+                new LiveTestRequest { Query = "compare", Files = [file], ConversationId = "existing", Json = true },
+                _ => new LiveTestDestination("synthetic", "tenant", "schema", "explicit"),
+                (_, _, _) => Task.FromResult("token"), (_, _, _) => session);
+            using var output = new StringWriter();
+
+            Assert.Equal(1, await execution.RenderAsync(output, new StringWriter(), false, CancellationToken.None));
+
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("internal-error", result.RootElement.GetProperty("errorKind").GetString());
+            Assert.Equal("attempted", result.RootElement.GetProperty("queryDelivery").GetString());
+            Assert.True(result.RootElement.GetProperty("partial").GetBoolean());
+            Assert.Equal(1, session.QueryCalls);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
+    [Theory]
     [InlineData(6, false)]
     [InlineData(1, true)]
     public async Task InvalidFileCombinationsFailBeforeResolutionOrAuthentication(int fileCount, bool startConversation)
@@ -425,6 +530,8 @@ public sealed class LiveTestExecutionTests
         public IAsyncEnumerable<JsonElement> QueryAsync(string query, string conversationId,
             IReadOnlyList<LiveTestAttachment> attachments, CancellationToken cancellationToken)
         {
+            if (FailAttachmentSynchronously)
+                throw new NotSupportedException("Do not infer delivery from an adapter failure.");
             Attachments = attachments;
             return QueryAsync(query, conversationId, cancellationToken);
         }
@@ -433,6 +540,8 @@ public sealed class LiveTestExecutionTests
         public string? Query { get; private set; }
         public string? ConversationUsed { get; private set; }
         public bool FailQuery { get; init; }
+        public bool FailAttachmentSynchronously { get; init; }
+        public Exception? FailureAfterReply { get; init; }
         public string? ServiceConversationId => StartCalls > 0 ? "confirmed" : null;
 
         public async IAsyncEnumerable<JsonElement> StartAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -452,6 +561,31 @@ public sealed class LiveTestExecutionTests
             yield return JsonDocument.Parse("""{"type":"message","text":"answer"}""").RootElement.Clone();
             await Task.CompletedTask;
             if (FailQuery) throw new IOException("do not leak the service response");
+            if (FailureAfterReply is { } failure) throw failure;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class LegacySession : ILiveTestSession
+    {
+        public int StartCalls { get; private set; }
+        public int QueryCalls { get; private set; }
+        public string? ServiceConversationId => StartCalls > 0 ? "created" : null;
+
+        public async IAsyncEnumerable<JsonElement> StartAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            StartCalls++;
+            yield return JsonSerializer.SerializeToElement(new { type = "message", text = "opening" });
+            await Task.CompletedTask;
+        }
+
+        public IAsyncEnumerable<JsonElement> QueryAsync(
+            string query, string conversationId, CancellationToken cancellationToken)
+        {
+            QueryCalls++;
+            throw new InvalidOperationException("An attachment must not be dropped.");
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

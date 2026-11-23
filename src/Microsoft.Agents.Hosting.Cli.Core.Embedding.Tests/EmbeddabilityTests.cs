@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Agents.Hosting.Cli.Core.Abs;
 using Microsoft.Agents.Hosting.Cli.Core.Ams;
 using Microsoft.Agents.Hosting.Cli.Core.Auth;
@@ -139,6 +140,38 @@ public sealed class EmbeddabilityTests
         {
             Assert.DoesNotContain(exact, loadedNames);
         }
+    }
+
+    [Fact]
+    public async Task EmbeddedLegacyLiveTestSessionDelegatesAnEmptyAttachmentList()
+    {
+        var legacy = new LegacyLiveTestSession();
+        ILiveTestSession session = legacy;
+        using var cancellation = new CancellationTokenSource();
+
+        var replies = session.QueryAsync("hello", "conversation", [], cancellation.Token);
+        var messages = new List<string?>();
+        await foreach (var reply in replies)
+            messages.Add(reply.GetString());
+
+        Assert.Equal(["legacy reply"], messages);
+        Assert.Equal(1, legacy.QueryCalls);
+        Assert.Equal("hello", legacy.Query);
+        Assert.Equal("conversation", legacy.ConversationId);
+        Assert.Equal(cancellation.Token, legacy.CancellationToken);
+    }
+
+    [Fact]
+    public void EmbeddedLegacyLiveTestSessionRejectsAttachmentsWithoutSending()
+    {
+        var legacy = new LegacyLiveTestSession();
+        ILiveTestSession session = legacy;
+        var attachment = new LiveTestAttachment("file.txt", "text/plain", [1]);
+
+        Assert.Throws<LiveTestAttachmentsNotSupportedException>(() =>
+            session.QueryAsync("hello", "conversation", [attachment], CancellationToken.None));
+
+        Assert.Equal(0, legacy.QueryCalls);
     }
 
     [Fact]
@@ -304,5 +337,36 @@ public sealed class EmbeddabilityTests
         // port would have thrown had preview reached it).
         Assert.Equal(0, session.LoginFlowCalls);
         Assert.Equal(0, presenter.PresentCalls);
+    }
+
+    private sealed class LegacyLiveTestSession : ILiveTestSession
+    {
+        public int QueryCalls { get; private set; }
+        public string? Query { get; private set; }
+        public string? ConversationId { get; private set; }
+        public CancellationToken CancellationToken { get; private set; }
+        public string? ServiceConversationId => null;
+        public IAsyncEnumerable<JsonElement> Replies { get; } = LegacyReplies();
+
+        public IAsyncEnumerable<JsonElement> StartAsync(CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The legacy query test does not start a conversation.");
+
+        public IAsyncEnumerable<JsonElement> QueryAsync(
+            string query, string conversationId, CancellationToken cancellationToken)
+        {
+            QueryCalls++;
+            Query = query;
+            ConversationId = conversationId;
+            CancellationToken = cancellationToken;
+            return Replies;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private static async IAsyncEnumerable<JsonElement> LegacyReplies()
+        {
+            yield return JsonSerializer.SerializeToElement("legacy reply");
+            await Task.CompletedTask;
+        }
     }
 }

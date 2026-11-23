@@ -96,9 +96,20 @@ public sealed class LiveTestExecution : ILiveTestStreamingResult, IStreamingFail
             if (!_request.StartConversation)
             {
                 delivery = "attempted";
-                var replies = attachments.Count == 0
-                    ? session.QueryAsync(_request.Query!, conversationId, cancellationToken)
-                    : session.QueryAsync(_request.Query!, conversationId, attachments, cancellationToken);
+                IAsyncEnumerable<JsonElement> replies;
+                try
+                {
+                    replies = attachments.Count == 0
+                        ? session.QueryAsync(_request.Query!, conversationId, cancellationToken)
+                        : session.QueryAsync(_request.Query!, conversationId, attachments, cancellationToken);
+                }
+                catch (LiveTestAttachmentsNotSupportedException unsupportedAttachments) when (attachments.Count > 0)
+                {
+                    // The default overload rejects files synchronously, before dispatch.
+                    delivery = "not-attempted";
+                    throw new LiveTestFailure("unsupported-attachments", 1, unsupportedAttachments.Message,
+                        "Use a session that supports attachments or send the query without files. Starting a new conversation may already have caused remote effects.");
+                }
                 await foreach (var activity in replies.WithCancellation(cancellationToken))
                 {
                     ConfirmId(session.ServiceConversationId, ref conversationId, ref conversationSource);
