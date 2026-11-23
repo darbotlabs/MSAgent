@@ -103,7 +103,7 @@ public sealed class AmsAgentAdapterTests
               "ppmiRegistrationsKept": [{ "deploymentId": "{{Deployment}}", "managedIdentityId": "mi-1" }]
             }
             """));
-        var tokens = new FakePpapiTokenProvider { Scopes = PowerPlatformApiPermissions.AppsUpdate };
+        var tokens = new FakePpapiTokenProvider { Scopes = PowerPlatformApiPermissions.AppsDelete };
 
         var result = await Adapter(handler, tokens).CascadeDeleteAsync(new AmsAgentCascadeDeleteTransportRequest { ServiceTarget = ControlPlane(), AgentId = Agent, ETag = EntityTag }, default);
 
@@ -124,7 +124,7 @@ public sealed class AmsAgentAdapterTests
     {
         var handler = new CapturingPackageHandler(_ => FakeHttpResponse.Json(HttpStatusCode.OK, $$"""{ "agentId": "{{Agent}}", "runtimeCopiesKept": {}, "ppmiRegistrationsKept": "pending" }"""));
 
-        var result = await Adapter(handler, ReadAndUpdateTokens()).CascadeDeleteAsync(new AmsAgentCascadeDeleteTransportRequest { ServiceTarget = ControlPlane(), AgentId = Agent, ETag = EntityTag }, default);
+        var result = await Adapter(handler, AgentOperationTokens()).CascadeDeleteAsync(new AmsAgentCascadeDeleteTransportRequest { ServiceTarget = ControlPlane(), AgentId = Agent, ETag = EntityTag }, default);
 
         Assert.Equal(Agent, result.AgentId);
         Assert.Empty(result.Deployments);
@@ -151,7 +151,7 @@ public sealed class AmsAgentAdapterTests
     [InlineData("list", PowerPlatformApiPermissions.AppsUpdate)]
     [InlineData("packages", PowerPlatformApiPermissions.AppsUpdate)]
     [InlineData("update", PowerPlatformApiPermissions.AppsRead)]
-    [InlineData("cascadeDelete", PowerPlatformApiPermissions.AppsRead)]
+    [InlineData("cascadeDelete", PowerPlatformApiPermissions.AppsRead + " " + PowerPlatformApiPermissions.AppsUpdate)]
     public async Task TokenWithoutTheOperationPermission_SendsNothing(string operation, string scopes)
     {
         var handler = new CapturingPackageHandler(_ => FakeHttpResponse.Json(HttpStatusCode.OK, AgentBody));
@@ -181,7 +181,7 @@ public sealed class AmsAgentAdapterTests
         response.Headers.TryAddWithoutValidation("x-ms-request-id", "service-request-id");
         var handler = new CapturingPackageHandler(_ => response);
 
-        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, ReadAndUpdateTokens()), operation));
+        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, AgentOperationTokens()), operation));
 
         var sent = Assert.Single(handler.Requests);
         Assert.Equal(errorKind, exception.ErrorKind);
@@ -199,7 +199,7 @@ public sealed class AmsAgentAdapterTests
     {
         var handler = new CapturingPackageHandler(_ => FakeHttpResponse.Json(HttpStatusCode.Conflict, new JsonObject { ["error"] = new JsonObject { ["code"] = code, ["message"] = serviceMessage + "\u001b[2J" } }.ToJsonString()));
 
-        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, ReadAndUpdateTokens()), operation));
+        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, AgentOperationTokens()), operation));
 
         Assert.Equal(errorKind, exception.ErrorKind);
         Assert.Equal(exitCode, exception.ExitCode);
@@ -215,7 +215,7 @@ public sealed class AmsAgentAdapterTests
     {
         var handler = new CapturingPackageHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
 
-        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, ReadAndUpdateTokens()), operation));
+        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, AgentOperationTokens()), operation));
 
         Assert.NotEqual(AmsRefusals.LifecycleUnavailableKind, exception.ErrorKind);
         Assert.Single(handler.Requests);
@@ -237,7 +237,7 @@ public sealed class AmsAgentAdapterTests
     {
         var handler = new CapturingPackageHandler(_ => FakeHttpResponse.Json(HttpStatusCode.OK, body));
 
-        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, ReadAndUpdateTokens()), operation));
+        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, AgentOperationTokens()), operation));
 
         Assert.Equal("invalid-ams-response", exception.ErrorKind);
         Assert.DoesNotContain("private-response-detail", exception.Message, StringComparison.Ordinal);
@@ -263,5 +263,5 @@ public sealed class AmsAgentAdapterTests
 
     private static FakePpapiTokenProvider ReadTokens() => new() { Scopes = PowerPlatformApiPermissions.AppsRead };
 
-    private static FakePpapiTokenProvider ReadAndUpdateTokens() => new() { Scopes = $"{PowerPlatformApiPermissions.AppsRead} {PowerPlatformApiPermissions.AppsUpdate}" };
+    private static FakePpapiTokenProvider AgentOperationTokens() => new() { Scopes = $"{PowerPlatformApiPermissions.AppsRead} {PowerPlatformApiPermissions.AppsUpdate} {PowerPlatformApiPermissions.AppsDelete}" };
 }

@@ -53,7 +53,7 @@ public sealed class AmsAgentAdapter : IAmsAgentReadTransport, IAmsAgentTransport
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var response = await _sender.SendAsync(Call(HttpMethod.Post, AmsRoutes.AgentCascadeDelete(request.ServiceTarget, request.AgentId), request.ServiceTarget, PowerPlatformApiPermissions.AppsUpdate, "Agent delete", isNewRoute: true) with { IfMatch = request.ETag, OutcomeMayBeIndeterminate = true }, cancellationToken).ConfigureAwait(false);
+        var response = await _sender.SendAsync(Call(HttpMethod.Post, AmsRoutes.AgentCascadeDelete(request.ServiceTarget, request.AgentId), request.ServiceTarget, PowerPlatformApiPermissions.AppsDelete, "Agent delete", isNewRoute: true) with { IfMatch = request.ETag, OutcomeMayBeIndeterminate = true }, cancellationToken).ConfigureAwait(false);
         return AmsBotServiceCall.Read(response, "Agent delete", "a valid delete result", "agent", ParseCascadeDelete);
     }
 
