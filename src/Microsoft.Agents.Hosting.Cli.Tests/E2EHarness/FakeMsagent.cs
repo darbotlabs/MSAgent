@@ -13,11 +13,11 @@ internal sealed class FakeMsagent
 
         if (OperatingSystem.IsWindows())
         {
-            File.WriteAllText(ExecutablePath, "@echo off\r\n>>\"%~dp0invocations.log\" echo(%*\r\ntype \"%~dp0stdout.txt\"\r\n");
+            File.WriteAllText(ExecutablePath, "@echo off\r\nmore >nul\r\n>>\"%~dp0invocations.log\" echo(%*\r\ntype \"%~dp0stdout.txt\"\r\n");
         }
         else
         {
-            File.WriteAllText(ExecutablePath, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/invocations.log\"\ncat \"$(dirname \"$0\")/stdout.txt\"\n");
+            File.WriteAllText(ExecutablePath, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/invocations.log\"\ncat >/dev/null\ncat \"$(dirname \"$0\")/stdout.txt\"\n");
             File.SetUnixFileMode(ExecutablePath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
