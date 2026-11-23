@@ -13,7 +13,7 @@ namespace Microsoft.Agents.Hosting.Cli.Tests.Ams;
 public sealed class AmsDeploymentServiceTests
 {
     [Fact]
-    public async Task Create_WritesARecordOnlyWithTheAgentsLanguageAndNamesTheDeployStep()
+    public async Task Create_WritesARecordOnlyWithTheAgentsLanguage()
     {
         var agents = new FakeAmsAgentTransport { Agents = [CodeAgent()] };
         var deployments = new FakeAmsDeploymentTransport { OnCreate = Created };
@@ -32,7 +32,7 @@ public sealed class AmsDeploymentServiceTests
         Assert.Equal($"Deployment dev-proof ({Deployment}) created. It is a record only: nothing runs until it is deployed.", text[0]);
         Assert.Contains("  package: none deployed yet", text);
         Assert.Contains("  endpoint: none deployed yet", text);
-        Assert.Equal($"Next: put it live with `msagent agent deploy --agent-id {Agent} --deployment-id {Deployment}`.", text[^1]);
+        Assert.Equal("  Azure Bot Service: none", text[^1]);
     }
 
     [Fact]
@@ -156,14 +156,13 @@ public sealed class AmsDeploymentServiceTests
         Assert.Contains("not deployed", text, StringComparison.Ordinal);
         Assert.Contains("dev endpoint", text, StringComparison.Ordinal);
         Assert.Contains(TunnelEndpoint, text, StringComparison.Ordinal);
-        Assert.Contains("A pending endpoint goes live at the next `msagent agent deploy` without --commit-id.", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("On a package deployment", text, StringComparison.Ordinal);
-        Assert.Contains("Bots kept from deleted deployment records, removed by `msagent agent delete`", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("msagent", text, StringComparison.Ordinal);
+        Assert.Contains("Bots kept from deleted deployment records", text, StringComparison.Ordinal);
         Assert.Contains("ams-old", text, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task List_APackageDeploymentWithARequestedEndpoint_SaysTheNextDeploySwitchesItToThatEndpoint()
+    public async Task List_APackageDeploymentWithARequestedEndpoint_ShowsItAsPending()
     {
         var deployments = new FakeAmsDeploymentTransport { Deployments = [DeploymentRecord() with { RequestedEndpoint = TunnelEndpoint }] };
 
@@ -173,16 +172,15 @@ public sealed class AmsDeploymentServiceTests
         Assert.Equal((AgentDeploymentAmsRecord.PackageKind, true, TunnelEndpoint), (deployment.Kind, deployment.EndpointChangePending, deployment.RequestedEndpoint));
         var text = string.Join(Environment.NewLine, result.ToTextLines());
         Assert.Contains(TunnelEndpoint, text, StringComparison.Ordinal);
-        Assert.Contains("A pending endpoint goes live at the next `msagent agent deploy` without --commit-id.", text, StringComparison.Ordinal);
-        Assert.Contains("On a package deployment, that deploy switches it from its package to the pending dev endpoint.", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("msagent", text, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task List_WithoutDeployments_NamesTheCreateStep()
+    public async Task List_WithoutDeployments_SaysSo()
     {
         var result = await Service(new FakeAmsAgentTransport(), new FakeAmsDeploymentTransport()).ListAsync(new AgentDeploymentAmsListRequest { AgentId = Agent }, default);
 
-        Assert.Equal([$"Agent {Agent} has no deployments. Create one with `msagent deployment create`."], result.ToTextLines());
+        Assert.Equal([$"Agent {Agent} has no deployments."], result.ToTextLines());
     }
 
     [Fact]
@@ -251,7 +249,8 @@ public sealed class AmsDeploymentServiceTests
 
         Assert.Equal(["list", "update"], deployments.Calls);
         Assert.Equal(TunnelEndpoint, Assert.IsType<AmsDeploymentUpdateTransportRequest>(deployments.Requests[1]).RequestedEndpoint);
-        Assert.Equal("The requested endpoint is not deployed yet: the next `msagent agent deploy` without --commit-id puts it live.", result.ToTextLines()[^1]);
+        Assert.Contains($"  requested endpoint: {TunnelEndpoint}, not deployed yet; the next `msagent agent deploy` without --commit-id puts it live.", result.ToTextLines());
+        Assert.DoesNotContain(result.ToTextLines(), line => line.StartsWith("The requested endpoint", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -264,7 +263,8 @@ public sealed class AmsDeploymentServiceTests
         Assert.Equal(["read", "update"], deployments.Calls);
         Assert.Equal(TunnelEndpoint, Assert.IsType<AmsDeploymentUpdateTransportRequest>(deployments.Requests[1]).RequestedEndpoint);
         Assert.Equal((AgentDeploymentAmsRecord.PackageKind, true), (result.Deployment.Kind, result.Deployment.EndpointChangePending));
-        Assert.Equal("The requested endpoint is not deployed yet: the next `msagent agent deploy` without --commit-id switches the deployment from its package to this dev endpoint.", result.ToTextLines()[^1]);
+        Assert.Contains($"  requested endpoint: {TunnelEndpoint}, not deployed yet; the next `msagent agent deploy` without --commit-id switches the deployment from its package to this dev endpoint.", result.ToTextLines());
+        Assert.DoesNotContain(result.ToTextLines(), line => line.StartsWith("The requested endpoint", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -343,7 +343,7 @@ public sealed class AmsDeploymentServiceTests
         Assert.Equal(["list", "delete"], deployments.Calls);
         Assert.True(result.WasLive);
         Assert.Equal(AgentDeploymentAmsDeleteResult.DeletedStatus, result.Status);
-        Assert.Contains($"Still running: the deployment keeps answering in environment {TargetEnvironment} through its Azure Bot Service instance ams-bot-1.", result.ToTextLines());
+        Assert.Equal([$"Deployment record dev-proof ({Deployment}) deleted.", $"Still running: the deployment keeps answering in environment {TargetEnvironment} through its Azure Bot Service instance ams-bot-1."], result.ToTextLines());
     }
 
     [Theory]

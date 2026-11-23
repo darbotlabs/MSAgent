@@ -43,7 +43,8 @@ public sealed class AgentDeploymentUpdateCommandHostTests
         var request = handlers.Single<AgentDeploymentAmsUpdateRequest>();
         Assert.Equal(("Contoso Agent", "dev-proof", TunnelEndpoint, (string?)null, (string?)null), (request.AgentName, request.DeploymentName, request.EndpointUrl, request.NewName, request.EnvironmentId));
         Assert.Contains("Only its record changed.", stdout, StringComparison.Ordinal);
-        Assert.Contains("The requested endpoint is not deployed yet: the next `msagent agent deploy` without --commit-id puts it live.", stdout, StringComparison.Ordinal);
+        Assert.Contains($"  requested endpoint: {TunnelEndpoint}, not deployed yet; the next `msagent agent deploy` without --commit-id puts it live.", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("The requested endpoint is not deployed yet", stdout, StringComparison.Ordinal);
     }
 
     [Theory]

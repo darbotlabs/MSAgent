@@ -52,7 +52,7 @@ public sealed class AgentDeployServiceTests
         var result = await Service(new FakeAmsAgentTransport(), deployments).DeployAsync(ById() with { CommitId = $" {Commit.ToUpperInvariant()} " }, default);
 
         Assert.Equal(Commit, Assert.IsType<AmsDeploymentDeployTransportRequest>(deployments.Requests[1]).CommitId);
-        Assert.Contains($"Live: commit {Commit} (Package Revision {Revision}).", result.ToTextLines());
+        Assert.Contains(result.ToTextLines(), line => line.StartsWith($"  package: commit {Commit}, Package Revision {Revision},", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -114,8 +114,7 @@ public sealed class AgentDeployServiceTests
         var result = await Service(new FakeAmsAgentTransport(), deployments).DeployAsync(ById(), default);
 
         Assert.Equal(AgentDeployResult.BotCreated, result.Bot);
-        Assert.Contains("Azure Bot Service: created ams-bot-1.", result.ToTextLines());
-        Assert.Contains($"Live: commit {Commit} (Package Revision {Revision}).", result.ToTextLines());
+        Assert.Equal([$"Deployment dev-proof ({Deployment}) deployed.", .. result.Deployment.DetailLines(), "Azure Bot Service: created ams-bot-1."], result.ToTextLines());
     }
 
     [Fact]
@@ -130,7 +129,7 @@ public sealed class AgentDeployServiceTests
     }
 
     [Fact]
-    public async Task Deploy_ADevEndpointDeployment_PutsTheRequestedEndpointLiveAndNamesTheOneItReplaced()
+    public async Task Deploy_ADevEndpointDeployment_PutsTheRequestedEndpointLiveAndRecordsTheOneItReplaced()
     {
         var deployments = new FakeAmsDeploymentTransport { Deployments = [DevEndpointRecord(RuntimeEndpoint, TunnelEndpoint)], OnDeploy = input => DevEndpointRecord(TunnelEndpoint, TunnelEndpoint) };
 
@@ -140,8 +139,8 @@ public sealed class AgentDeployServiceTests
         Assert.Equal(RuntimeEndpoint, result.PreviousEndpoint);
         Assert.Equal(AgentDeploymentAmsRecord.DevEndpointKind, result.Deployment.Kind);
         Assert.False(result.KindSwitched);
-        Assert.Contains($"Live: endpoint {TunnelEndpoint} (was {RuntimeEndpoint}).", result.ToTextLines());
-        Assert.DoesNotContain(result.ToTextLines(), line => line.StartsWith("Switched", StringComparison.Ordinal));
+        Assert.Contains($"  endpoint: {TunnelEndpoint}", result.ToTextLines());
+        Assert.DoesNotContain(result.ToTextLines(), line => line.StartsWith("Live:", StringComparison.Ordinal) || line.StartsWith("Switched", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -159,7 +158,7 @@ public sealed class AgentDeployServiceTests
         Assert.Equal(AgentDeploymentAmsRecord.PackageKind, result.Deployment.Kind);
         Assert.Equal(TunnelEndpoint, result.PreviousEndpoint);
         var text = result.ToTextLines();
-        Assert.Contains($"Live: commit {Commit} (Package Revision {Revision}).", text);
+        Assert.Contains(text, line => line.StartsWith($"  package: commit {Commit}, Package Revision {Revision},", StringComparison.Ordinal));
         Assert.Contains(switchLine, text);
     }
 
@@ -175,7 +174,7 @@ public sealed class AgentDeployServiceTests
         Assert.Equal(AgentDeploymentAmsRecord.DevEndpointKind, result.Deployment.Kind);
         Assert.Equal(AgentDeployResult.BotKept, result.Bot);
         var text = result.ToTextLines();
-        Assert.Contains($"Live: endpoint {TunnelEndpoint} (was {RuntimeEndpoint}).", text);
+        Assert.Contains($"  endpoint: {TunnelEndpoint}", text);
         Assert.Contains($"Switched from the package to the dev endpoint {TunnelEndpoint}.", text);
         Assert.DoesNotContain(text, line => line.StartsWith("  package:", StringComparison.Ordinal));
     }
@@ -201,7 +200,7 @@ public sealed class AgentDeployServiceTests
         var result = await Service(new FakeAmsAgentTransport(), deployments).DeployAsync(ById(), default);
 
         Assert.Null(result.PreviousEndpoint);
-        Assert.Contains($"Live: endpoint {TunnelEndpoint}.", result.ToTextLines());
+        Assert.Contains($"  endpoint: {TunnelEndpoint}", result.ToTextLines());
     }
 
     [Fact]

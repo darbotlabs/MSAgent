@@ -104,13 +104,8 @@ public sealed record AgentDeploymentAmsRecord
     public string? ManagedIdentityId { get; init; }
     public AgentDeploymentBotService? BotService { get; init; }
 
-    /// <summary>Renders deployments as a table, with the pending endpoint changes and their next step.</summary>
-    public static IReadOnlyList<string> Table(string title, IReadOnlyList<AgentDeploymentAmsRecord> deployments) =>
-    [
-        .. TextGrid.RenderTable(title, ["NAME", "ID", "STAGE", "KIND", "STATE", "BOT", "PENDING ENDPOINT"], [.. deployments.Select(deployment => deployment.Row())]),
-        .. deployments.Any(deployment => deployment.EndpointChangePending) ? ["  A pending endpoint goes live at the next `msagent agent deploy` without --commit-id."] : Array.Empty<string>(),
-        .. deployments.Any(deployment => deployment.EndpointChangePending && deployment.Kind == PackageKind) ? ["  On a package deployment, that deploy switches it from its package to the pending dev endpoint."] : Array.Empty<string>(),
-    ];
+    /// <summary>Renders deployments as a table.</summary>
+    public static IReadOnlyList<string> Table(string title, IReadOnlyList<AgentDeploymentAmsRecord> deployments) => TextGrid.RenderTable(title, ["NAME", "ID", "STAGE", "KIND", "STATE", "BOT", "PENDING ENDPOINT"], [.. deployments.Select(deployment => deployment.Row())]);
 
     /// <summary>Returns the lines that describe the record.</summary>
     public IReadOnlyList<string> DetailLines() =>
@@ -174,8 +169,6 @@ public sealed record AgentDeploymentAmsResult : ITextGridRenderable
             _ => $"Deployment {Deployment.DeploymentName} ({Deployment.DeploymentId})",
         },
         .. Deployment.DetailLines(),
-        .. Status == CreatedStatus ? [$"Next: put it live with `msagent agent deploy --agent-id {Deployment.AgentId} --deployment-id {Deployment.DeploymentId}`."] : Array.Empty<string>(),
-        .. Status == UpdatedStatus && Deployment.EndpointChangePending ? [$"The requested endpoint is not deployed yet: {Deployment.PendingEndpointStep}."] : Array.Empty<string>(),
     ];
 }
 
@@ -191,7 +184,7 @@ public sealed record AgentDeploymentAmsListResult : ITextGridRenderable
     /// <inheritdoc />
     public IReadOnlyList<string> ToTextLines() =>
     [
-        .. Deployments.Count == 0 ? [$"Agent {AgentId} has no deployments. Create one with `msagent deployment create`."] : AgentDeploymentAmsRecord.Table($"Deployments of agent {AgentId}", Deployments),
+        .. Deployments.Count == 0 ? [$"Agent {AgentId} has no deployments."] : AgentDeploymentAmsRecord.Table($"Deployments of agent {AgentId}", Deployments),
         .. AgentAmsKeptBot.Table(KeptBots),
     ];
 }
@@ -211,7 +204,7 @@ public sealed record AgentDeploymentAmsDeleteResult : ITextGridRenderable
 
     /// <inheritdoc />
     public IReadOnlyList<string> ToTextLines() => Status == DeletedStatus
-        ? [$"Deployment record {Deployment.DeploymentName} ({Deployment.DeploymentId}) deleted.", .. WasLive ? AgentAmsConfirmation.LiveDeploymentKeptLines(Deployment) : Array.Empty<string>()]
+        ? [$"Deployment record {Deployment.DeploymentName} ({Deployment.DeploymentId}) deleted.", .. WasLive ? [AgentAmsConfirmation.StillRunningLine(Deployment)] : Array.Empty<string>()]
         : AgentAmsConfirmation.StoppedLines(Status, Deployment.DeploymentName);
 }
 
@@ -248,9 +241,6 @@ public sealed record AgentDeployResult : ITextGridRenderable
     [
         $"Deployment {Deployment.DeploymentName} ({Deployment.DeploymentId}) deployed.",
         .. Deployment.DetailLines(),
-        Deployment.Kind == AgentDeploymentAmsRecord.DevEndpointKind
-            ? $"Live: endpoint {Deployment.Endpoint}{(PreviousEndpoint is null ? string.Empty : $" (was {PreviousEndpoint})")}."
-            : $"Live: commit {TextGrid.DescribeOrDash(Deployment.CommitId)} (Package Revision {TextGrid.DescribeOrDash(Deployment.PackageRevisionId)}).",
         .. KindSwitched ? [Deployment.Kind == AgentDeploymentAmsRecord.DevEndpointKind ? $"Switched from the package to the dev endpoint {Deployment.Endpoint}." : $"Switched from the dev endpoint to commit {TextGrid.DescribeOrDash(Deployment.CommitId)}; {(Deployment.BotService is null ? "the deployment now answers" : "the bot now points")} at {Deployment.Endpoint}."] : Array.Empty<string>(),
         Bot switch
         {

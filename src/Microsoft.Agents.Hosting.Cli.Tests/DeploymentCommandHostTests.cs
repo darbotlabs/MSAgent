@@ -350,7 +350,7 @@ public class DeploymentCommandHostTests
     }
 
     [Fact]
-    public void DeploymentCreate_AmsRoute_TakesTheAgentNameAndHomeEnvironmentAndNamesTheDeployStep()
+    public void DeploymentCreate_AmsRoute_TakesTheAgentNameAndHomeEnvironmentAndShowsOnlyTheRecord()
     {
         var handlers = new RecordingAmsHandlers();
 
@@ -359,7 +359,9 @@ public class DeploymentCommandHostTests
         Assert.Equal(ExitCodes.Success, exitCode);
         var request = handlers.Single<AgentDeploymentAmsCreateRequest>();
         Assert.Equal(("Contoso Agent", "home-env"), (request.AgentName, request.EnvironmentId));
-        Assert.Contains($"Next: put it live with `msagent agent deploy --agent-id {AmsAgentId} --deployment-id {AmsDeploymentId}`.", stdout, StringComparison.Ordinal);
+        Assert.Contains("created. It is a record only: nothing runs until it is deployed.", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Next:", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("msagent agent deploy", stdout, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -442,7 +444,8 @@ public class DeploymentCommandHostTests
 
         Assert.Contains($"Deployments of agent {AmsAgentId}", stdout, StringComparison.Ordinal);
         Assert.Contains("PENDING ENDPOINT", stdout, StringComparison.Ordinal);
-        Assert.Contains("Bots kept from deleted deployment records, removed by `msagent agent delete`", stdout, StringComparison.Ordinal);
+        Assert.Contains("Bots kept from deleted deployment records", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("msagent", stdout, StringComparison.Ordinal);
     }
 
     [Theory]

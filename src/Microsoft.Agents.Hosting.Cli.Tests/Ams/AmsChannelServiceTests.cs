@@ -254,6 +254,9 @@ public sealed class AmsChannelServiceTests
         { new AgentDeploymentAmsChannelTokenRequest { ChannelName = null }, "--channel" },
         { new AgentDeploymentAmsChannelTokenRequest { ChannelName = "directline", SiteName = " " }, "--site cannot be empty." },
         { new AgentDeploymentAmsChannelTokenRequest { ChannelName = "directline", UserId = "" }, "--user-id cannot be empty." },
+        { new AgentDeploymentAmsChannelTokenRequest { ChannelName = "directline", UserId = "user-1" }, "--user-id must start with dl_ and name a user, for example dl_tester." },
+        { new AgentDeploymentAmsChannelTokenRequest { ChannelName = "directline", UserId = " dl_ " }, "--user-id must start with dl_ and name a user, for example dl_tester." },
+        { new AgentDeploymentAmsChannelTokenRequest { ChannelName = "directline", UserId = "DL_user" }, "--user-id must start with dl_ and name a user, for example dl_tester." },
     };
 
     [Theory]

@@ -31,7 +31,6 @@ public sealed record AgentPackageUploadResult : ITextGridRenderable
         $"  package operation: {PackageOperationId}",
         $"  Package Revision: {PackageRevisionId}, {PackageSizeInBytes} bytes, sha256 {PackageDigest}",
         $"  commit: {TextGrid.DescribeOrDash(CommitId)}",
-        "This confirms package upload only. `msagent agent deploy` puts it live on an existing deployment.",
     ];
 }
 

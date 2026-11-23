@@ -51,7 +51,7 @@ public sealed record AgentAmsKeptBot
     public DateTimeOffset? DeletedTime { get; init; }
 
     /// <summary>Renders kept bots as a table, or nothing when there are none.</summary>
-    public static IReadOnlyList<string> Table(IReadOnlyList<AgentAmsKeptBot> keptBots) => keptBots.Count == 0 ? [] : TextGrid.RenderTable("Bots kept from deleted deployment records, removed by `msagent agent delete`", ["DEPLOYMENT", "ID", "ENVIRONMENT", "BOT", "DELETED"], [.. keptBots.Select(bot => new[] { TextGrid.DescribeOrDash(bot.DeploymentName), bot.DeploymentId, TextGrid.DescribeOrDash(bot.EnvironmentId), TextGrid.DescribeOrDash(bot.BotName), TextGrid.DescribeTimestamp(bot.DeletedTime) })]);
+    public static IReadOnlyList<string> Table(IReadOnlyList<AgentAmsKeptBot> keptBots) => keptBots.Count == 0 ? [] : TextGrid.RenderTable("Bots kept from deleted deployment records", ["DEPLOYMENT", "ID", "ENVIRONMENT", "BOT", "DELETED"], [.. keptBots.Select(bot => new[] { TextGrid.DescribeOrDash(bot.DeploymentName), bot.DeploymentId, TextGrid.DescribeOrDash(bot.EnvironmentId), TextGrid.DescribeOrDash(bot.BotName), TextGrid.DescribeTimestamp(bot.DeletedTime) })]);
 }
 
 /// <summary>A deployment, or a kept bot, that an agent delete removed.</summary>
@@ -104,7 +104,7 @@ public sealed record AgentAmsListResult : ITextGridRenderable
 
     /// <inheritdoc />
     public IReadOnlyList<string> ToTextLines() => Agents.Count == 0
-        ? [$"Environment {EnvironmentId} has no code agents. Create one with `msagent agent create --agent-type CodeAgent`."]
+        ? [$"Environment {EnvironmentId} has no code agents."]
         : TextGrid.RenderTable($"Code agents of environment {EnvironmentId}", ["NAME", "ID", "STATE", "CHANGED"], [.. Agents.Select(agent => new[] { TextGrid.DescribeOrDash(agent.DisplayName), agent.AgentId, TextGrid.DescribeOrDash(agent.State), TextGrid.DescribeTimestamp(agent.ChangedTime) })]);
 }
 
@@ -125,7 +125,7 @@ public sealed record AgentAmsShowResult : ITextGridRenderable
         $"Agent {TextGrid.DescribeOrDash(Agent.DisplayName)} ({Agent.AgentId})",
         .. Agent.DetailLines(),
         .. !DeploymentsAvailable ? ["Deployments: unavailable; AMS does not list deployments in this environment yet."]
-            : Deployments.Count == 0 ? ["Deployments: none. Create one with `msagent deployment create`."]
+            : Deployments.Count == 0 ? ["Deployments: none."]
             : AgentDeploymentAmsRecord.Table("Deployments", Deployments),
         .. AgentAmsKeptBot.Table(KeptBots),
     ];
@@ -201,7 +201,7 @@ public sealed record AgentCommitListResult : ITextGridRenderable
     public IReadOnlyList<string> ToTextLines() =>
     [
         .. Commits.Count == 0
-            ? [$"Agent {AgentId} has no uploads. Upload one with `msagent agent package upload`."]
+            ? [$"Agent {AgentId} has no uploads."]
             : TextGrid.RenderTable($"Commits of agent {AgentId}, newest first", ["COMMIT", "UPLOADED", "SIZE", "DEPLOYMENTS"], [.. Commits.Select(commit => new[] { TextGrid.DescribeOrDash(commit.CommitId), TextGrid.DescribeTimestamp(commit.CreatedTime), commit.SizeInBytes?.ToString(CultureInfo.InvariantCulture) ?? TextGrid.Dash, DeploymentsText(commit) })]),
         .. DeploymentsAvailable ? Array.Empty<string>() : ["Deployments: unavailable; AMS does not list deployments in this environment yet."],
     ];
@@ -221,10 +221,13 @@ public static class AgentAmsConfirmation
     /// <summary>Returns the text of a delete that stopped before changing anything.</summary>
     public static IReadOnlyList<string> StoppedLines(string status, string name) => status == NameMismatchStatus ? [$"The name typed did not match '{name}'; nothing was deleted."] : ["Delete cancelled; nothing was deleted."];
 
+    /// <summary>Returns the line that says a live deployment keeps answering after its record is deleted.</summary>
+    public static string StillRunningLine(AgentDeploymentAmsRecord deployment) => $"Still running: the deployment keeps answering in environment {deployment.TargetEnvironmentId}{(deployment.BotService is null ? string.Empty : $" through its Azure Bot Service instance {deployment.BotService.Name}")}.";
+
     /// <summary>Returns what keeps running after the record of a live deployment is deleted.</summary>
     public static IReadOnlyList<string> LiveDeploymentKeptLines(AgentDeploymentAmsRecord deployment) =>
     [
-        $"Still running: the deployment keeps answering in environment {deployment.TargetEnvironmentId}{(deployment.BotService is null ? string.Empty : $" through its Azure Bot Service instance {deployment.BotService.Name}")}.",
+        StillRunningLine(deployment),
         "Until `msagent agent delete` removes it, its channels and OAuth connections cannot be changed, AMS issues no new Direct Line tokens for it, and this agent cannot get another deployment in that environment. `msagent agent show` lists the kept bot.",
     ];
 }

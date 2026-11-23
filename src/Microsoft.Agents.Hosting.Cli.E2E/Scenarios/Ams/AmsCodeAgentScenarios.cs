@@ -413,17 +413,24 @@ public static class AmsCodeAgentScenarios
         yield return Builder.Make("AC-42", "deployment channel token issues a Direct Line token and conversation that no transcript holds", AmsCreate, SafetyTier.Creating, timeout: BotBudget, run: async context =>
         {
             var live = await AmsSteps.PooledDeploymentAsync(context).ConfigureAwait(false);
+            var site = AmsSteps.Name(context, "ac42");
 
-            var issued = await DeploymentWriteAsync(context, live, "channel", "token", "--channel", "directline").ConfigureAwait(false);
+            context.Assert.ExitZero(await DeploymentWriteAsync(context, live, "channel", "update", "--channel", "directline", "--add-site", $"siteName={site}", "isV3Enabled=true").ConfigureAwait(false), "add a site that issues tokens");
+            await ReadSitesUntilAsync(context, live, sites => SiteEnabled(sites, site) == true && SiteFlag(sites, site, "isV3Enabled") == true, "show reads the added site enabled for Direct Line 3.0 clients").ConfigureAwait(false);
+
+            var issued = await DeploymentWriteAsync(context, live, "channel", "token", "--channel", "directline", "--site", site).ConfigureAwait(false);
 
             context.Assert.ExitZero(issued, "deployment channel token");
             var root = AmsSteps.Root(issued);
             var token = AmsOutput.Text(root, "token", "token");
             context.Assert.True(token is { Length: > 0 }, "a token");
+            context.Assert.Equal(site, AmsOutput.Text(root, "token", "siteName"), "from the added site");
             context.Assert.True(AmsOutput.Text(root, "token", "conversationId") is { Length: > 0 }, "for a conversation");
             context.Assert.True(AmsOutput.Find(root, "token", "expiresInSeconds") is { ValueKind: JsonValueKind.Number } expiry && expiry.GetInt32() > 0, "that expires");
             context.Assert.True(Uri.TryCreate(AmsOutput.Text(root, "token", "endpoint"), UriKind.Absolute, out var endpoint) && endpoint.Scheme == Uri.UriSchemeHttps, "at an https Direct Line endpoint");
             context.Assert.False(context.Transcript.Mentions(token!), "the token is in no transcript");
+
+            context.Assert.ExitZero(await DeploymentWriteAsync(context, live, "channel", "update", "--channel", "directline", "--remove-site", $"siteName={site}").ConfigureAwait(false), "remove the site");
         });
 
         yield return Builder.Make("AC-43", "a Teams channel is created, shown, updated, listed and deleted", AmsCreate, SafetyTier.Creating, timeout: BotBudget, run: async context =>
@@ -620,7 +627,9 @@ public static class AmsCodeAgentScenarios
         return AmsOutput.Items(AmsSteps.Root(shown), "channel", "parameters", "sites");
     }
 
-    private static bool? SiteEnabled(IReadOnlyList<JsonElement> sites, string siteName) => sites.FirstOrDefault(site => string.Equals(AmsOutput.Text(site, "siteName"), siteName, StringComparison.OrdinalIgnoreCase)) is { ValueKind: JsonValueKind.Object } found ? AmsOutput.Find(found, "isEnabled") is { ValueKind: JsonValueKind.True } : null;
+    private static bool? SiteEnabled(IReadOnlyList<JsonElement> sites, string siteName) => SiteFlag(sites, siteName, "isEnabled");
+
+    private static bool? SiteFlag(IReadOnlyList<JsonElement> sites, string siteName, string flag) => sites.FirstOrDefault(site => string.Equals(AmsOutput.Text(site, "siteName"), siteName, StringComparison.OrdinalIgnoreCase)) is { ValueKind: JsonValueKind.Object } found ? AmsOutput.Find(found, flag) is { ValueKind: JsonValueKind.True } : null;
 
     private static Task<MsagentResult> ReadConnectionUntilAsync(ScenarioContext context, AmsLiveDeployment live, string connection, Func<JsonElement, bool> shows, string check) =>
         ReadUntilAsync(context, () => DeploymentReadAsync(context, live, "oauth", "show", "--connection", connection), result => AmsOutput.Succeeded(result) && AmsOutput.Find(AmsSteps.Root(result), "connection") is { } found && shows(found), check);

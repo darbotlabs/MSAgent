@@ -87,7 +87,7 @@ public sealed class AmsChannelAdapter : IAmsChannelTransport
 
         var deployment = request.Deployment;
         using var content = JsonContent.Create(new DirectLineTokenWireRequest { SiteName = request.SiteName, UserId = request.UserId }, options: RequestJson);
-        var response = await SendAsync(HttpMethod.Post, AmsRoutes.DirectLineToken(deployment.ServiceTarget, deployment.AgentId, deployment.DeploymentId), deployment, PowerPlatformApiPermissions.AppsUpdate, "Direct Line token request", "directline", content, cancellationToken).ConfigureAwait(false);
+        var response = await SendAsync(HttpMethod.Post, AmsRoutes.DirectLineToken(deployment.ServiceTarget, deployment.AgentId, deployment.DeploymentId), deployment, PowerPlatformApiPermissions.AppsUpdate, "Direct Line token request", "directline", content, cancellationToken, issuesToken: true).ConfigureAwait(false);
         return Parse(response, "Direct Line token request", "a valid token", root => new DeploymentChannelToken
         {
             Token = GetRequiredString(root, "token"),
@@ -108,15 +108,16 @@ public sealed class AmsChannelAdapter : IAmsChannelTransport
         return Parse(response, "Channel webhook request", "valid webhook values", root => new DeploymentChannelWebhook { CallbackUrl = GetRequiredString(root, "callbackUrl"), VerifyToken = GetRequiredString(root, "verifyToken") });
     }
 
-    private Task<AmsResponse> SendAsync(HttpMethod method, Uri uri, AmsDeploymentReadTransportRequest deployment, string permission, string phase, string? channelType, HttpContent? content, CancellationToken cancellationToken, bool outcomeMayBeIndeterminate = false) =>
-        _sender.SendAsync(AmsBotServiceCall.Create(method, uri, deployment, permission, phase, content, (status, code, serviceMessage) => Refusal(status, code, serviceMessage, channelType), outcomeMayBeIndeterminate), cancellationToken);
+    private Task<AmsResponse> SendAsync(HttpMethod method, Uri uri, AmsDeploymentReadTransportRequest deployment, string permission, string phase, string? channelType, HttpContent? content, CancellationToken cancellationToken, bool outcomeMayBeIndeterminate = false, bool issuesToken = false) =>
+        _sender.SendAsync(AmsBotServiceCall.Create(method, uri, deployment, permission, phase, content, (status, code, serviceMessage) => Refusal(status, code, serviceMessage, channelType, issuesToken), outcomeMayBeIndeterminate), cancellationToken);
 
-    private static (string Message, int ExitCode, string ErrorKind, string Remediation)? Refusal(int status, string? code, string? serviceMessage, string? channelType)
+    private static (string Message, int ExitCode, string ErrorKind, string Remediation)? Refusal(int status, string? code, string? serviceMessage, string? channelType, bool issuesToken)
     {
         bool Is(string expected) => AmsBotServiceCall.IsCode(code, expected);
         return status switch
         {
             (int)HttpStatusCode.NotFound when Is("ChannelNotFound") => ($"The Azure Bot Service instance of the deployment has no '{channelType}' channel.", ExitCodes.Usage, "channel-not-found", "Create the channel with `msagent deployment channel create`, or list the channels AMS manages with `msagent deployment channel list`."),
+            (int)HttpStatusCode.BadRequest when issuesToken && Is("InvalidChannelRequest") => ($"AMS could not issue a Direct Line token: {AmsRefusals.Echo(serviceMessage, "no site of the deployment's Direct Line channel can issue one.")}", ExitCodes.Usage, "invalid-channel-request", "A token needs a site of the deployment's Direct Line channel that is enabled and accepts Direct Line 3.0 clients, and a new bot can list no site until its Direct Line channel is first updated. With the same agent and deployment options, list the sites with `msagent deployment channel show --channel directline`, then pass a usable one with --site, add one with `msagent deployment channel update --channel directline --add-site siteName=<name> isV3Enabled=true`, or turn one on with `msagent deployment channel update --channel directline --set-site siteName=<name> isEnabled=true isV3Enabled=true`."),
             (int)HttpStatusCode.BadRequest when Is("InvalidChannelRequest") => ($"AMS refused the channel request: {serviceMessage ?? "it does not satisfy the AMS channel catalog."}", ExitCodes.Usage, "invalid-channel-request", "Correct the request as the message describes. `msagent deployment channel types` lists the channel types, operations and parameters AMS accepts."),
             (int)HttpStatusCode.BadRequest when Is("ChannelSettingsRefused") => ($"Azure Bot Service refused the credentials or settings of the '{channelType}' channel, so AMS did not change it.", ExitCodes.Usage, "channel-settings-refused", "Check the credentials and settings in --parameters against the third-party console, then retry. `msagent deployment channel types` lists the parameters of each channel type."),
             (int)HttpStatusCode.NotImplemented when Is("DirectLineRegionNotSupported") => ("AMS cannot issue a Direct Line token for the deployment's bot, because the bot is outside the 'global' location or this cloud has no Direct Line endpoint, so no token was issued.", ExitCodes.Failure, "directline-unavailable", "AMS issues Direct Line tokens only for bots in the 'global' location, in clouds where it has a Direct Line endpoint; ask the AMS team about the deployment's bot."),

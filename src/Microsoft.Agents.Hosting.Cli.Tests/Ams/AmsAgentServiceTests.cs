@@ -29,14 +29,14 @@ public sealed class AmsAgentServiceTests
     }
 
     [Fact]
-    public async Task List_OfANamedEnvironmentWithoutCodeAgents_NamesTheCreateStep()
+    public async Task List_OfANamedEnvironmentWithoutCodeAgents_SaysSo()
     {
         var agents = new FakeAmsAgentTransport();
 
         var result = await Service(agents, new FakeAmsDeploymentTransport()).ListAsync(new AgentAmsListRequest { EnvironmentId = TargetEnvironment }, default);
 
         Assert.Equal(TargetEnvironment, Assert.IsType<AmsServiceTarget>(Assert.Single(agents.Requests)).EnvironmentId);
-        Assert.Equal([$"Environment {TargetEnvironment} has no code agents. Create one with `msagent agent create --agent-type CodeAgent`."], result.ToTextLines());
+        Assert.Equal([$"Environment {TargetEnvironment} has no code agents."], result.ToTextLines());
     }
 
     [Fact]
@@ -72,11 +72,11 @@ public sealed class AmsAgentServiceTests
     }
 
     [Fact]
-    public async Task Show_WithoutDeployments_NamesTheCreateStep()
+    public async Task Show_WithoutDeployments_SaysSo()
     {
         var result = await Service(new FakeAmsAgentTransport { Agents = [CodeAgent()] }, new FakeAmsDeploymentTransport()).ShowAsync(new AgentAmsShowRequest { AgentId = Agent }, default);
 
-        Assert.Contains("Deployments: none. Create one with `msagent deployment create`.", result.ToTextLines());
+        Assert.Equal("Deployments: none.", result.ToTextLines()[^1]);
     }
 
     [Fact]
@@ -274,11 +274,11 @@ public sealed class AmsAgentServiceTests
     }
 
     [Fact]
-    public async Task CommitList_WithoutUploads_NamesTheUploadStep()
+    public async Task CommitList_WithoutUploads_SaysSo()
     {
         var result = await Service(new FakeAmsAgentTransport(), new FakeAmsDeploymentTransport()).ListCommitsAsync(new AgentCommitListRequest { AgentId = Agent }, default);
 
-        Assert.Equal([$"Agent {Agent} has no uploads. Upload one with `msagent agent package upload`."], result.ToTextLines());
+        Assert.Equal([$"Agent {Agent} has no uploads."], result.ToTextLines());
     }
 
     [Fact]

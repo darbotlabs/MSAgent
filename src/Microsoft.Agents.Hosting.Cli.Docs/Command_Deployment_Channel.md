@@ -163,6 +163,13 @@ AMS generates the token with the site's key, which never leaves AMS. Without `--
 the only enabled site that accepts Direct Line 3.0 clients; when several do, it refuses and names
 them. The result has `token`, `conversationId`, `expiresInSeconds`, `siteName`, and `endpoint`.
 
+A new bot can list no Direct Line site until its channel is first updated, so before its first token,
+add a site with
+`msagent deployment channel update ... --channel directline --add-site siteName=<name> isV3Enabled=true`
+and pass `--site <name>`. When no site can issue the token, the error keeps AMS's reason and says how
+to pass, add, or turn on a site. The CLI refuses a `--user-id` that does not start with `dl_` before it
+calls AMS.
+
 ## `msagent deployment channel webhook`
 
 **Gated, AMS only.**

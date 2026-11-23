@@ -283,8 +283,7 @@ public sealed class AgentPackageUploadServiceTests
             Assert.Equal((1, 1, 1), (agents.Lists, agents.Calls, packages.Calls));
             Assert.Equal(Agent, packages.LastRequest!.AgentId);
             Assert.Equal("0123456789abcdef0123456789abcdef01234567", result.CommitId);
-            Assert.Contains("  commit: 0123456789abcdef0123456789abcdef01234567", result.ToTextLines());
-            Assert.Equal("This confirms package upload only. `msagent agent deploy` puts it live on an existing deployment.", result.ToTextLines()[^1]);
+            Assert.Equal("  commit: 0123456789abcdef0123456789abcdef01234567", result.ToTextLines()[^1]);
         }
         finally
         {

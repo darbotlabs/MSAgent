@@ -17,6 +17,8 @@ public sealed class AmsChannelService :
     ICommandHandler<AgentDeploymentAmsChannelTokenRequest, DeploymentResult<DeploymentChannelToken>>,
     ICommandHandler<AgentDeploymentAmsChannelWebhookRequest, DeploymentResult<DeploymentChannelWebhook>>
 {
+    private const string DirectLineUserIdPrefix = "dl_";
+
     private readonly AmsAddressResolver _addresses;
     private readonly IAmsChannelTransport _channels;
     private readonly IBrowserLauncher? _browser;
@@ -99,7 +101,7 @@ public sealed class AmsChannelService :
 
         ValidateOperation(request.ChannelName, "token");
         var siteName = DeploymentRequestValidator.Optional("--site", request.SiteName);
-        var userId = DeploymentRequestValidator.Optional("--user-id", request.UserId);
+        var userId = ValidateUserId(request.UserId);
         var deployment = await ResolveAsync(request, "deployment channel token", cancellationToken).ConfigureAwait(false);
         var token = await _channels.CreateDirectLineTokenAsync(new AmsDirectLineTokenTransportRequest { Deployment = deployment, SiteName = siteName, UserId = userId }, cancellationToken).ConfigureAwait(false);
         return new() { Status = DeploymentOperationStatus.Created, Payload = token, TargetName = "Token", TargetInstanceName = token.SiteName };
@@ -136,6 +138,13 @@ public sealed class AmsChannelService :
         var validatedName = DeploymentChannelCatalog.ValidateChannelName(channelName);
         return DeploymentChannelCatalog.SupportsOperation(DeploymentChannelCatalog.FindChannelDefinition(validatedName, ChannelKeyType.Name), operation) ? validatedName : throw DeploymentException.ChannelOperationNotSupported(validatedName, operation);
     }
+
+    private static string? ValidateUserId(string? value) => DeploymentRequestValidator.Optional("--user-id", value) switch
+    {
+        null => null,
+        var userId when userId.Length > DirectLineUserIdPrefix.Length && userId.StartsWith(DirectLineUserIdPrefix, StringComparison.Ordinal) => userId,
+        _ => throw new UsageException($"--user-id must start with {DirectLineUserIdPrefix} and name a user, for example {DirectLineUserIdPrefix}tester."),
+    };
 
     private static (IReadOnlyDictionary<string, JsonElement>? Properties, AmsChannelItemChange? ItemChange) ToUpdateWire(DeploymentChannelOperationPlan<DeploymentChannelUpdateRequest> plan) => plan switch
     {

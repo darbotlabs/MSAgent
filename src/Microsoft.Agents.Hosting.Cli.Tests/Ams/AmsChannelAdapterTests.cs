@@ -325,6 +325,35 @@ public sealed class AmsChannelAdapterTests
     }
 
     [Theory]
+    [InlineData("""{"error":{"code":"InvalidChannelRequest","message":"The 'directline' channel has no item in 'sites' with siteName 'Default Site'."}}""", "The 'directline' channel has no item in 'sites' with siteName 'Default Site'.")]
+    [InlineData("""{"error":{"code":"InvalidChannelRequest","message":"The 'directline' channel has no enabled site that accepts Direct Line 3.0 clients, so it cannot issue a token."}}""", "The 'directline' channel has no enabled site that accepts Direct Line 3.0 clients, so it cannot issue a token.")]
+    [InlineData("""{"error":{"code":"InvalidChannelRequest","message":"The site 'Portal' of the 'directline' channel cannot issue tokens, because it is disabled or does not accept Direct Line 3.0 clients."}}""", "The site 'Portal' of the 'directline' channel cannot issue tokens, because it is disabled or does not accept Direct Line 3.0 clients.")]
+    [InlineData("""{"error":{"code":"InvalidChannelRequest","message":"The 'directline' channel has several sites that can issue tokens: 'Default Site', 'Portal'. Name one in 'siteName'."}}""", "The 'directline' channel has several sites that can issue tokens: 'Default Site', 'Portal'. Name one in 'siteName'.")]
+    [InlineData("""{"error":{"code":"invalidchannelrequest","message":"The site '\u001b[31mPortal' cannot issue tokens."}}""", "The site '\uFFFD[31mPortal' cannot issue tokens.")]
+    [InlineData("""{"error":{"code":"InvalidChannelRequest"}}""", "no site of the deployment's Direct Line channel can issue one.")]
+    public async Task TokenSiteRefusal_KeepsTheAmsReasonAndSaysHowToGetAUsableSite(string body, string reason)
+    {
+        var response = FakeHttpResponse.Json(HttpStatusCode.BadRequest, body);
+        response.Headers.TryAddWithoutValidation("x-ms-request-id", "service-token-id");
+        var handler = new CapturingPackageHandler(_ => response);
+
+        var exception = await Assert.ThrowsAsync<AgentDeployException>(() => Invoke(Adapter(handler, ReadAndUpdateTokens()), "token"));
+
+        var sent = Assert.Single(handler.Requests);
+        Assert.Equal("invalid-channel-request", exception.ErrorKind);
+        Assert.Equal(ExitCodes.Usage, exception.ExitCode);
+        Assert.StartsWith($"AMS could not issue a Direct Line token: {reason}", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"clientRequestId={sent.ClientRequestId}", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("serviceRequestId=service-token-id", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("a new bot can list no site until its Direct Line channel is first updated", exception.Remediation, StringComparison.Ordinal);
+        Assert.Contains("`msagent deployment channel show --channel directline`", exception.Remediation, StringComparison.Ordinal);
+        Assert.Contains("pass a usable one with --site", exception.Remediation, StringComparison.Ordinal);
+        Assert.Contains("`msagent deployment channel update --channel directline --add-site siteName=<name> isV3Enabled=true`", exception.Remediation, StringComparison.Ordinal);
+        Assert.Contains("`msagent deployment channel update --channel directline --set-site siteName=<name> isEnabled=true isV3Enabled=true`", exception.Remediation, StringComparison.Ordinal);
+        Assert.DoesNotContain("msagent deployment channel types", exception.Remediation, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("create", HttpStatusCode.GatewayTimeout, "AgentManagementServiceDataPlaneCallFailed")]
     [InlineData("get", HttpStatusCode.Conflict, "ChannelNotFound")]
     [InlineData("update", HttpStatusCode.BadRequest, "SomethingElse")]

@@ -75,14 +75,13 @@ public sealed class AgentDeployCommandHostTests
     }
 
     [Fact]
-    public void PackageUpload_HumanOutput_NamesTheCommitAndTheDeployStep()
+    public void PackageUpload_HumanOutput_EndsWithTheCommit()
     {
         var operations = new FakeOperations { OnAgentPackageUpload = _ => FakeOperations.CreateStubPackageUploadResult() with { CommitId = Commit } };
 
         var (_, stdout, _) = Run(operations, UploadArgs());
 
-        Assert.Contains($"  commit: {Commit}", stdout, StringComparison.Ordinal);
-        Assert.Contains("This confirms package upload only. `msagent agent deploy` puts it live on an existing deployment.", stdout, StringComparison.Ordinal);
+        Assert.Equal($"  commit: {Commit}", stdout.TrimEnd().Split(Environment.NewLine)[^1]);
     }
 
     [Theory]
@@ -239,27 +238,29 @@ public sealed class AgentDeployCommandHostTests
     }
 
     [Fact]
-    public void Deploy_HumanOutput_SaysWhatWentLiveAndWhetherTheBotWasCreatedOrKept()
+    public void Deploy_HumanOutput_ShowsTheDeploymentAndEndsWithWhetherTheBotWasCreatedOrKept()
     {
         var operations = new FakeOperations { OnAgentDeploy = _ => FakeOperations.CreateStubDeployResult() with { Bot = AgentDeployResult.BotKept, Deployment = FakeOperations.CreateStubDeploymentRecord() with { BotService = Bot() } } };
 
         var (_, stdout, _) = Run(operations, DeployArgs());
 
         Assert.Contains($"Deployment dev-proof ({Deployment}) deployed.", stdout, StringComparison.Ordinal);
-        Assert.Contains($"Live: commit {Commit} (Package Revision {Revision}).", stdout, StringComparison.Ordinal);
-        Assert.Contains($"Azure Bot Service: kept {BotName}.", stdout, StringComparison.Ordinal);
+        Assert.Contains($"  package: commit {Commit}, Package Revision {Revision},", stdout, StringComparison.Ordinal);
+        Assert.Equal($"Azure Bot Service: kept {BotName}.", stdout.TrimEnd().Split(Environment.NewLine)[^1]);
+        Assert.DoesNotContain("Live:", stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("Switched", stdout, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Deploy_HumanOutput_NamesTheDevEndpointThatWentLiveAndTheOneItReplaced()
+    public void Deploy_HumanOutput_ShowsTheDevEndpointThatWentLive()
     {
         var operations = new FakeOperations { OnAgentDeploy = _ => FakeOperations.CreateStubDeployResult() with { PreviousEndpoint = "https://runtime.example/api/messages", Deployment = FakeOperations.CreateStubDeploymentRecord() with { Kind = AgentDeploymentAmsRecord.DevEndpointKind, PackageRevisionId = null, CommitId = null, Endpoint = TunnelEndpoint, RequestedEndpoint = TunnelEndpoint } } };
 
         var (_, stdout, _) = Run(operations, DeployArgs());
 
-        Assert.Contains($"Live: endpoint {TunnelEndpoint} (was https://runtime.example/api/messages).", stdout, StringComparison.Ordinal);
+        Assert.Contains($"  endpoint: {TunnelEndpoint}", stdout, StringComparison.Ordinal);
         Assert.Contains("Azure Bot Service: none; AMS bound no bot to this deployment.", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Live:", stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("  package:", stdout, StringComparison.Ordinal);
     }
 
